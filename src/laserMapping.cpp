@@ -60,7 +60,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
-#include <fast_lio/States.h>
+#include <eskf_lio/States.h>
 #include <geometry_msgs/Vector3.h>
 
 #ifdef DEPLOY
@@ -113,11 +113,11 @@ double copy_time, readd_time;
 std::deque<sensor_msgs::PointCloud2::ConstPtr> lidar_buffer;
 std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
 
-//surf feature in map
+// surf feature in map
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr cube_points_add(new PointCloudXYZI());
 
-//all points
+// all points
 PointCloudXYZI::Ptr laserCloudFullRes2(new PointCloudXYZI());
 PointCloudXYZI::Ptr featsArray[laserCloudNum];
 bool _last_inFOV[laserCloudNum];
@@ -136,7 +136,7 @@ pcl::KdTreeFLANN<PointType>::Ptr kdtreeSurfFromMap(new pcl::KdTreeFLANN<PointTyp
 Eigen::Vector3f XAxisPoint_body(LIDAR_SP_LEN, 0.0, 0.0);
 Eigen::Vector3f XAxisPoint_world(LIDAR_SP_LEN, 0.0, 0.0);
 
-//estimator inputs and output;
+// estimator inputs and output;
 MeasureGroup Measures;
 StatesGroup state;
 
@@ -147,7 +147,7 @@ void SigHandle(int sig)
     sig_buffer.notify_all();
 }
 
-//project lidar frame to world
+// project lidar frame to world
 void pointBodyToWorld(PointType const *const pi, PointType *const po)
 {
     Eigen::Vector3d p_body(pi->x, pi->y, pi->z);
@@ -907,20 +907,20 @@ int main(int argc, char **argv)
 #endif
                         }
 
-                        //matA0*matX0=matB0
-                        //AX+BY+CZ+D = 0 <=> AX+BY+CZ=-D <=> (A/D)X+(B/D)Y+(C/D)Z = -1
+                        // matA0*matX0=matB0
+                        // AX+BY+CZ+D = 0 <=> AX+BY+CZ=-D <=> (A/D)X+(B/D)Y+(C/D)Z = -1
                         //(X,Y,Z)<=>mat_a0
-                        //A/D, B/D, C/D <=> mat_x0
+                        // A/D, B/D, C/D <=> mat_x0
 
-                        cv::solve(matA0, matB0, matX0, cv::DECOMP_QR); //TODO
+                        cv::solve(matA0, matB0, matX0, cv::DECOMP_QR); // TODO
 
                         float pa = matX0.at<float>(0, 0);
                         float pb = matX0.at<float>(1, 0);
                         float pc = matX0.at<float>(2, 0);
                         float pd = 1;
 
-                        //ps is the norm of the plane norm_vec vector
-                        //pd is the distance from point to plane
+                        // ps is the norm of the plane norm_vec vector
+                        // pd is the distance from point to plane
                         float ps = sqrt(pa * pa + pb * pb + pc * pc);
                         pa /= ps;
                         pb /= ps;
@@ -948,9 +948,9 @@ int main(int argc, char **argv)
 
                         if (planeValid)
                         {
-                            //loss fuction
+                            // loss fuction
                             float pd2 = pa * pointSel_tmpt.x + pb * pointSel_tmpt.y + pc * pointSel_tmpt.z + pd; //  公式12）    点到面的距离
-                            //if(fabs(pd2) > 0.1) continue;
+                            // if(fabs(pd2) > 0.1) continue;
                             float s = 1 - 0.9 * fabs(pd2) / sqrt(sqrt(pointSel_tmpt.x * pointSel_tmpt.x + pointSel_tmpt.y * pointSel_tmpt.y + pointSel_tmpt.z * pointSel_tmpt.z));
 
                             if ((s > 0.85)) // && ((std::abs(pd2) - res_last[i]) < 3 * res_mean_last))
@@ -1245,7 +1245,7 @@ int main(int argc, char **argv)
             /******* Publish Maps:  *******/
             sensor_msgs::PointCloud2 laserCloudMap;
             pcl::toROSMsg(*featsFromMap, laserCloudMap);
-            laserCloudMap.header.stamp = ros::Time::now(); //ros::Time().fromSec(last_timestamp_lidar);
+            laserCloudMap.header.stamp = ros::Time::now(); // ros::Time().fromSec(last_timestamp_lidar);
             laserCloudMap.header.frame_id = "/camera_init";
             pubLaserCloudMap.publish(laserCloudMap);
 
@@ -1253,7 +1253,7 @@ int main(int argc, char **argv)
             geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
             odomAftMapped.header.frame_id = "/camera_init";
             odomAftMapped.child_frame_id = "/aft_mapped";
-            odomAftMapped.header.stamp = ros::Time::now(); //ros::Time().fromSec(last_timestamp_lidar);
+            odomAftMapped.header.stamp = ros::Time::now(); // ros::Time().fromSec(last_timestamp_lidar);
             odomAftMapped.pose.pose.orientation.x = geoQuat.x;
             odomAftMapped.pose.pose.orientation.y = geoQuat.y;
             odomAftMapped.pose.pose.orientation.z = geoQuat.z;
