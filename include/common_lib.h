@@ -12,8 +12,11 @@
 #include <tf/transform_broadcaster.h>
 #include <eigen_conversions/eigen_msg.h>
 
+#include "my_utility.h"
+
 // #define DEBUG_PRINT
-// #define USE_ikdtree
+using namespace std;
+using namespace Eigen;
 
 #define PI_M (3.14159265358)
 #define G_m_s2 (9.8099)    // Gravaty const in GuangDong/China
@@ -21,7 +24,9 @@
 #define DIM_OF_PROC_N (12) // Dimension of process noise (Let Dim(SO(3)) = 3)
 #define CUBE_LEN (6.0)
 #define LIDAR_SP_LEN (2)
-#define INIT_COV (0.0001)
+#define INIT_COV (1)
+#define NUM_MATCH_POINTS (5)
+#define MAX_MEAS_DIM (10000)
 
 #define VEC_FROM_ARRAY(v) v[0], v[1], v[2]
 #define MAT_FROM_ARRAY(v) v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]
@@ -32,15 +37,25 @@
 #define DEBUG_FILE_DIR(name) (std::string(std::string(ROOT_DIR) + "Log/" + name))
 
 typedef eskf_lio::Pose6D Pose6D;
-typedef pcl::PointXYZINormal PointType;
+// typedef pcl::PointXYZINormal PointType;
 typedef pcl::PointCloud<PointType> PointCloudXYZI;
+typedef vector<PointType, Eigen::aligned_allocator<PointType>> PointVector;
+typedef Vector3d V3D;
+typedef Matrix3d M3D;
+typedef Vector3f V3F;
+typedef Matrix3f M3F;
+
+#define MD(a, b) Matrix<double, (a), (b)>
+#define VD(a) Matrix<double, (a), 1>
+#define MF(a, b) Matrix<float, (a), (b)>
+#define VF(a) Matrix<float, (a), 1>
 
 Eigen::Matrix3d Eye3d(Eigen::Matrix3d::Identity());
 Eigen::Matrix3f Eye3f(Eigen::Matrix3f::Identity());
 Eigen::Vector3d Zero3d(0, 0, 0);
 Eigen::Vector3f Zero3f(0, 0, 0);
 // Eigen::Vector3d Lidar_offset_to_IMU(0.05512, 0.02226, 0.0297); // Horizon
-Eigen::Vector3d Lidar_offset_to_IMU(0.04165, 0.02326, -0.0284); // Avia
+Eigen::Vector3d Lidar_offset_to_IMU(0.0, 0.0, -0.0); // Avia
 
 struct MeasureGroup // Lidar data and imu dates for the curent process
 {
@@ -145,6 +160,12 @@ template <typename T>
 T deg2rad(T degrees)
 {
     return degrees * PI_M / 180.0;
+}
+
+float calc_dist(PointType p1, PointType p2)
+{
+    float d = (p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z);
+    return d;
 }
 
 template <typename T>

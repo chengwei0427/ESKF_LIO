@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(eskf_lio)
 
-SET(CMAKE_BUILD_TYPE "Release")
+SET(CMAKE_BUILD_TYPE "Debug")
 
 ADD_COMPILE_OPTIONS(-std=c++14 )
 ADD_COMPILE_OPTIONS(-std=c++14 )
@@ -76,9 +76,9 @@ catkin_package(
 # target_link_libraries(imu_process ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 add_executable(loam_feat_extract src/feature_extract.cpp)
-target_link_libraries(loam_feat_extract ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+target_link_libraries(loam_feat_extract ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 
-add_executable(loam_laserMapping src/laserMapping.cpp)
+add_executable(loam_laserMapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp)
 add_dependencies(loam_laserMapping ${catkin_EXPORTED_TARGETS})
 target_link_libraries(loam_laserMapping ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${PYTHON_LIBRARIES})
 target_include_directories(loam_laserMapping PRIVATE ${PYTHON_INCLUDE_DIRS})

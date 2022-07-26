@@ -1,1025 +1,726 @@
-#include <ros/ros.h>
-#include <pcl_conversions/pcl_conversions.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <livox_ros_driver/CustomMsg.h>
+#pragma once
 
-// Feature will be updated in next version
+#include <ros/ros.h>
+
+#include <std_msgs/Header.h>
+#include <sensor_msgs/Imu.h>
+#include <sensor_msgs/PointCloud2.h>
+
+#include <vector>
+#include <cmath>
+#include <algorithm>
+#include <queue>
+#include <deque>
+#include <iostream>
+#include <fstream>
+#include <ctime>
+#include <cfloat>
+#include <iterator>
+#include <sstream>
+#include <string>
+#include <limits>
+#include <iomanip>
+#include <array>
+#include <thread>
+#include <mutex>
+#include <chrono>
+
+#include "cloud_info.h"
+#include "my_utility.h"
 
 using namespace std;
 
-#define IS_VALID(a) ((abs(a) > 1e8) ? true : false)
-
-typedef pcl::PointXYZINormal PointType;
-
-ros::Publisher pub_full, pub_surf, pub_corn;
-
-enum LID_TYPE
+enum class SensorType
 {
-  MID,
-  HORIZON,
-  VELO16,
-  OUST64
+  VELODYNE,
+  OUSTER,
+  ROBOSENSE,
+  LIVOX
 };
 
-enum Feature
+struct smoothness_t
 {
-  Nor,
-  Poss_Plane,
-  Real_Plane,
-  Edge_Jump,
-  Edge_Plane,
-  Wire,
-  ZeroPoint
-};
-enum Surround
-{
-  Prev,
-  Next
-};
-enum E_jump
-{
-  Nr_nor,
-  Nr_zero,
-  Nr_180,
-  Nr_inf,
-  Nr_blind
+  float value;
+  size_t ind;
 };
 
-struct orgtype
+struct by_value
 {
-  double range;
-  double dista;
-  double angle[2];
-  double intersect;
-  E_jump edj[2];
-  Feature ftype;
-  orgtype()
+  bool operator()(smoothness_t const &left, smoothness_t const &right)
   {
-    range = 0;
-    edj[Prev] = Nr_nor;
-    edj[Next] = Nr_nor;
-    ftype = Nor;
-    intersect = 2;
+    return left.value < right.value;
   }
 };
 
-const double rad2deg = 180 * M_1_PI;
+using PointXYZIRT = VelodynePointXYZIRT;
 
-int lidar_type;
-double blind, inf_bound;
-int N_SCANS;
-int group_size;
-double disA, disB;
-double limit_maxmid, limit_midmin, limit_maxmin;
-double p2l_ratio;
-double jump_up_limit, jump_down_limit;
-double cos160;
-double edgea, edgeb;
-double smallp_intersect, smallp_ratio;
-int point_filter_num;
-
-void mid_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-void horizon_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
-void velo16_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-void give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &types, pcl::PointCloud<PointType> &pl_corn, pcl::PointCloud<PointType> &pl_surf);
-void pub_func(pcl::PointCloud<PointType> &pl, ros::Publisher pub, const ros::Time &ct);
-int plane_judge(const pcl::PointCloud<PointType> &pl, vector<orgtype> &types, uint i, uint &i_nex, Eigen::Vector3d &curr_direct);
-bool small_plane(const pcl::PointCloud<PointType> &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct);
-bool edge_jump_judge(const pcl::PointCloud<PointType> &pl, vector<orgtype> &types, uint i, Surround nor_dir);
-
-int main(int argc, char **argv)
+class FeatureExtract
 {
-  ros::init(argc, argv, "feature_extract");
-  ros::NodeHandle n;
+public:
+  ros::NodeHandle nh;
+  // Topics
+  string pointCloudTopic;
+  // Frames
+  string lidarFrame;
 
-  n.param<int>("lidar_type", lidar_type, 0);
-  n.param<double>("blind", blind, 0.5);
-  n.param<double>("inf_bound", inf_bound, 10);
-  n.param<int>("N_SCANS", N_SCANS, 1);
-  n.param<int>("group_size", group_size, 8);
-  n.param<double>("disA", disA, 0.01);
-  n.param<double>("disB", disB, 0.1);
-  n.param<double>("p2l_ratio", p2l_ratio, 400);
-  n.param<double>("limit_maxmid", limit_maxmid, 9);
-  n.param<double>("limit_midmin", limit_midmin, 16);
-  n.param<double>("limit_maxmin", limit_maxmin, 3.24);
-  n.param<double>("jump_up_limit", jump_up_limit, 175.0);
-  n.param<double>("jump_down_limit", jump_down_limit, 5.0);
-  n.param<double>("cos160", cos160, 160.0);
-  n.param<double>("edgea", edgea, 3);
-  n.param<double>("edgeb", edgeb, 0.05);
-  n.param<double>("smallp_intersect", smallp_intersect, 170.0);
-  n.param<double>("smallp_ratio", smallp_ratio, 1.2);
-  n.param<int>("point_filter_num", point_filter_num, 4);
+  // Lidar Sensor Configuration
+  SensorType sensor;
+  int N_SCAN;
+  int Horizon_SCAN;
+  int downsampleRate;
+  float lidarMinRange;
+  float lidarMaxRange;
+  int point_filter_num;
+  int feature_enabled;
 
-  jump_up_limit = cos(jump_up_limit / 180 * M_PI);
-  jump_down_limit = cos(jump_down_limit / 180 * M_PI);
-  cos160 = cos(cos160 / 180 * M_PI);
-  smallp_intersect = cos(smallp_intersect / 180 * M_PI);
+  // LOAM
+  float edgeThreshold;
+  float surfThreshold;
+  int edgeFeatureMinValidNum;
+  int surfFeatureMinValidNum;
 
-  ros::Subscriber sub_points;
+  pcl::PointCloud<PointXYZIRT>::Ptr laserCloudIn;
+  pcl::PointCloud<OusterPointXYZIRT>::Ptr tmpOusterCloudIn;
+  pcl::PointCloud<rsPointXYZIRT>::Ptr tmpRSCloudIn;
+  pcl::PointCloud<PointType>::Ptr inputCloud;
+  pcl::PointCloud<PointType>::Ptr sampleCloud;
+  pcl::PointCloud<PointType>::Ptr fullCloud;
+  pcl::PointCloud<PointType>::Ptr extractedCloud;
 
-  switch (lidar_type)
+  pcl::PointCloud<PointType>::Ptr cornerCloud;
+  pcl::PointCloud<PointType>::Ptr surfaceCloud;
+
+  pcl::VoxelGrid<PointType> downSizeFilter;
+
+  GC_LOAM::cloud_info cloudInfo;
+  double timeScanCur;
+  double timeScanEnd;
+  cv::Mat rangeMat;
+
+  std::vector<smoothness_t> cloudSmoothness;
+  float *cloudCurvature;
+  int *cloudNeighborPicked;
+  int *cloudLabel;
+
+  // voxel filter paprams
+  float odometrySurfLeafSize;
+  float mappingCornerLeafSize;
+  float mappingSurfLeafSize;
+
+  // CPU Params
+  int numberOfCores;
+
+  ros::Subscriber subLaserCloud;
+
+  ros::Publisher pubLaserCloudInfo;
+  ros::Publisher pubCornerPoints;
+  ros::Publisher pubSurfacePoints;
+  ros::Publisher pubFullPoints;
+
+  std_msgs::Header cloudHeader;
+
+  std::vector<int> columnIdnCountVec;
+
+  FeatureExtract()
   {
-  case MID:
-    printf("MID40\n");
-    sub_points = n.subscribe("/livox/lidar", 1000, mid_handler);
-    // sub_points = n.subscribe("/livox/lidar_1LVDG1S006J5GZ3", 1000, mid_handler);
-    break;
+    nh.param<std::string>("pointCloudTopic", pointCloudTopic, "points_raw");
+    nh.param<std::string>("lidarFrame", lidarFrame, "base_link");
 
-  case HORIZON:
-    printf("HORIZON\n");
-    sub_points = n.subscribe("/livox/lidar", 1000, horizon_handler);
-    break;
-
-  case VELO16:
-    printf("VELO16\n");
-    sub_points = n.subscribe("/velodyne_points", 1000, velo16_handler);
-    break;
-
-  case OUST64:
-    printf("OUST64\n");
-    sub_points = n.subscribe("/os1_cloud_node/points", 1000, oust64_handler);
-    break;
-
-  default:
-    printf("Lidar type is wrong.\n");
-    exit(0);
-    break;
-  }
-
-  pub_full = n.advertise<sensor_msgs::PointCloud2>("/laser_cloud", 100);
-  pub_surf = n.advertise<sensor_msgs::PointCloud2>("/laser_cloud_flat", 100);
-  pub_corn = n.advertise<sensor_msgs::PointCloud2>("/laser_cloud_sharp", 100);
-
-  ros::spin();
-  return 0;
-}
-
-double vx, vy, vz;
-void mid_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
-{
-  pcl::PointCloud<PointType> pl;
-  pcl::fromROSMsg(*msg, pl);
-
-  pcl::PointCloud<PointType> pl_corn, pl_surf;
-  vector<orgtype> types;
-  uint plsize = pl.size() - 1;
-  pl_corn.reserve(plsize);
-  pl_surf.reserve(plsize);
-  types.resize(plsize + 1);
-
-  for (uint i = 0; i < plsize; i++)
-  {
-    types[i].range = pl[i].x;
-    vx = pl[i].x - pl[i + 1].x;
-    vy = pl[i].y - pl[i + 1].y;
-    vz = pl[i].z - pl[i + 1].z;
-    types[i].dista = vx * vx + vy * vy + vz * vz;
-  }
-  // plsize++;
-  types[plsize].range = sqrt(pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y);
-
-  give_feature(pl, types, pl_corn, pl_surf);
-
-  ros::Time ct(ros::Time::now());
-  pub_func(pl, pub_full, msg->header.stamp);
-  pub_func(pl_surf, pub_surf, msg->header.stamp);
-  pub_func(pl_corn, pub_corn, msg->header.stamp);
-}
-
-void horizon_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
-{
-  double t1 = omp_get_wtime();
-  vector<pcl::PointCloud<PointType>> pl_buff(N_SCANS);
-  vector<vector<orgtype>> typess(N_SCANS);
-  pcl::PointCloud<PointType> pl_full, pl_corn, pl_surf;
-
-  uint plsize = msg->point_num;
-
-  pl_corn.reserve(plsize);
-  pl_surf.reserve(plsize);
-  pl_full.resize(plsize);
-
-  for (int i = 0; i < N_SCANS; i++)
-  {
-    pl_buff[i].reserve(plsize);
-  }
-
-  for (uint i = 1; i < plsize; i++)
-  {
-    if ((msg->points[i].line < N_SCANS) && ((msg->points[i].tag & 0x30) == 0x10) && (!IS_VALID(msg->points[i].x)) && (!IS_VALID(msg->points[i].y)) && (!IS_VALID(msg->points[i].z)))
+    std::string sensorStr;
+    nh.param<std::string>("sensor", sensorStr, "");
+    if (sensorStr == "velodyne")
     {
-      pl_full[i].x = msg->points[i].x;
-      pl_full[i].y = msg->points[i].y;
-      pl_full[i].z = msg->points[i].z;
-      pl_full[i].intensity = msg->points[i].reflectivity;
-      pl_full[i].curvature = msg->points[i].offset_time / float(1000000); // use curvature as time of each laser points
-
-      if ((std::abs(pl_full[i].x - pl_full[i - 1].x) > 1e-7) || (std::abs(pl_full[i].y - pl_full[i - 1].y) > 1e-7) || (std::abs(pl_full[i].z - pl_full[i - 1].z) > 1e-7))
-      {
-        pl_buff[msg->points[i].line].push_back(pl_full[i]);
-      }
+      sensor = SensorType::VELODYNE;
     }
-  }
-
-  if (pl_buff[0].size() <= 7)
-  {
-    return;
-  }
-
-  for (int j = 0; j < N_SCANS; j++)
-  {
-    pcl::PointCloud<PointType> &pl = pl_buff[j];
-    vector<orgtype> &types = typess[j];
-    plsize = pl.size();
-    types.resize(plsize);
-    plsize--;
-    for (uint i = 0; i < plsize; i++)
+    else if (sensorStr == "livox")
     {
-
-      types[i].range = sqrt(pl[i].x * pl[i].x + pl[i].y * pl[i].y);
-      vx = pl[i].x - pl[i + 1].x;
-      vy = pl[i].y - pl[i + 1].y;
-      vz = pl[i].z - pl[i + 1].z;
-      types[i].dista = vx * vx + vy * vy + vz * vz;
-      // std::cout<<vx<<" "<<vx<<" "<<vz<<" "<<std::endl;
+      sensor == SensorType::LIVOX;
     }
-    // plsize++;
-    types[plsize].range = sqrt(pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y);
-
-    give_feature(pl, types, pl_corn, pl_surf);
-  }
-
-  ros::Time ct;
-  ct.fromNSec(msg->timebase);
-  pub_func(pl_full, pub_full, msg->header.stamp);
-  pub_func(pl_surf, pub_surf, msg->header.stamp);
-  pub_func(pl_corn, pub_corn, msg->header.stamp);
-  std::cout << "[~~~~~~~~~~~~ Feature Extract ]: time: " << omp_get_wtime() - t1 << " " << msg->header.stamp.toSec() << std::endl;
-}
-
-int orders[16] = {0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15};
-
-void velo16_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
-{
-  pcl::PointCloud<PointType> pl_orig;
-  pcl::fromROSMsg(*msg, pl_orig);
-  uint plsize = pl_orig.size();
-
-  vector<pcl::PointCloud<PointType>> pl_buff(N_SCANS);
-  vector<vector<orgtype>> typess(N_SCANS);
-  pcl::PointCloud<PointType> pl_corn, pl_surf, pl_full;
-
-  int scanID;
-  int last_stat = -1;
-  int idx = 0;
-
-  for (int i = 0; i < N_SCANS; i++)
-  {
-    pl_buff[i].resize(plsize);
-    typess[i].resize(plsize);
-  }
-
-  for (uint i = 0; i < plsize; i++)
-  {
-    PointType &ap = pl_orig[i];
-    double leng = sqrt(ap.x * ap.x + ap.y * ap.y);
-    if (leng < blind)
+    else if (sensorStr == "ouster")
     {
-      continue;
+      sensor = SensorType::OUSTER;
     }
-
-    double ang = atan(ap.z / leng) * rad2deg;
-    scanID = int((ang + 15) / 2 + 0.5);
-
-    if (scanID >= N_SCANS || scanID < 0)
+    else if (sensorStr == "robosense")
     {
-      continue;
-    }
-
-    if (orders[scanID] <= last_stat)
-    {
-      idx++;
-    }
-
-    pl_buff[scanID][idx].x = ap.x;
-    pl_buff[scanID][idx].y = ap.y;
-    pl_buff[scanID][idx].z = ap.z;
-    pl_buff[scanID][idx].intensity = ap.intensity;
-    typess[scanID][idx].range = leng;
-    last_stat = orders[scanID];
-  }
-
-  // for(int i=0; i<N_SCANS; i++)
-  // {
-  //   pl_full += pl_buff[i];
-  //   pub_func(pl_buff[i], pub_full, msg->header.stamp);
-  // }
-
-  // for(int i=0; i<10; i++)
-  // {
-  //   printf("%f %f %f\n", pl_buff[0][i].x, pl_buff[0][i].y, pl_buff[0][i].z);
-  // }
-  // cout << endl;
-
-  idx++;
-
-  for (int j = 0; j < N_SCANS; j++)
-  {
-    pcl::PointCloud<PointType> &pl = pl_buff[j];
-    vector<orgtype> &types = typess[j];
-    pl.erase(pl.begin() + idx, pl.end());
-    types.erase(types.begin() + idx, types.end());
-    plsize = idx - 1;
-    for (uint i = 0; i < plsize; i++)
-    {
-      // types[i].range = sqrt(pl[i].x*pl[i].x + pl[i].y*pl[i].y);
-      vx = pl[i].x - pl[i + 1].x;
-      vy = pl[i].y - pl[i + 1].y;
-      vz = pl[i].z - pl[i + 1].z;
-      types[i].dista = vx * vx + vy * vy + vz * vz;
-    }
-
-    types[plsize].range = sqrt(pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y);
-
-    give_feature(pl, types, pl_corn, pl_surf);
-  }
-
-  // printf("%zu %zu\n", pl_surf.size(), pl_corn.size());
-
-  pub_func(pl_orig, pub_full, msg->header.stamp);
-  pub_func(pl_surf, pub_surf, msg->header.stamp);
-  pub_func(pl_corn, pub_corn, msg->header.stamp);
-}
-
-void velo16_handler1(const sensor_msgs::PointCloud2::ConstPtr &msg)
-{
-  pcl::PointCloud<PointType> pl_orig;
-  pcl::fromROSMsg(*msg, pl_orig);
-
-  pcl::PointCloud<PointType> pl_corn, pl_surf, pl_full;
-  vector<pcl::PointCloud<PointType>> pl_buff(N_SCANS);
-  vector<vector<orgtype>> typess(N_SCANS);
-
-  uint plsize = pl_orig.size();
-  pl_corn.reserve(plsize);
-  pl_surf.reserve(plsize);
-  pl_full.reserve(plsize);
-
-  for (int i = 0; i < N_SCANS; i++)
-  {
-    pl_buff[i].resize(plsize);
-    typess[i].resize(plsize);
-  }
-
-  int idx = -1;
-  int stat = 0; // 0代表上一次为0
-  int scanID = 0;
-
-  for (uint i = 0; i < plsize; i++)
-  {
-    PointType &ap = pl_orig[i];
-    double leng = sqrt(ap.x * ap.x + ap.y * ap.y);
-
-    if (leng > blind)
-    {
-      if (stat == 0)
-      {
-        stat = 1;
-        idx++;
-      }
-
-      double ang = atan(ap.z / leng) * rad2deg;
-      scanID = int((ang + 15) / 2 + 0.5);
-      if (scanID >= N_SCANS || scanID < 0)
-      {
-        continue;
-      }
-      pl_buff[scanID][idx] = ap;
-      typess[scanID][idx].range = leng;
-      pl_full.push_back(ap);
+      sensor = SensorType::ROBOSENSE;
     }
     else
     {
-      stat = 0;
+      ROS_ERROR_STREAM(
+          "Invalid sensor type (must be either 'velodyne' 'ouster' 'robosense' or 'livox'): " << sensorStr);
+      ros::shutdown();
+    }
+    nh.param<int>("N_SCAN", N_SCAN, 16);
+    nh.param<int>("Horizon_SCAN", Horizon_SCAN, 1800);
+    nh.param<int>("downsampleRate", downsampleRate, 1);
+    nh.param<int>("pointFilterRate", point_filter_num, 1);
+    nh.param<float>("lidarMinRange", lidarMinRange, 1.0);
+    nh.param<int>("feature_enabled", feature_enabled, 1);
+    nh.param<float>("lidarMaxRange", lidarMaxRange, 1000.0);
+
+    nh.param<float>("edgeThreshold", edgeThreshold, 0.1);
+    nh.param<float>("surfThreshold", surfThreshold, 0.1);
+    nh.param<int>("edgeFeatureMinValidNum", edgeFeatureMinValidNum, 10);
+    nh.param<int>("surfFeatureMinValidNum", surfFeatureMinValidNum, 100);
+
+    nh.param<float>("odometrySurfLeafSize", odometrySurfLeafSize, 0.2);
+    nh.param<float>("mappingCornerLeafSize", mappingCornerLeafSize, 0.2);
+    nh.param<float>("mappingSurfLeafSize", mappingSurfLeafSize, 0.2);
+
+    subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 50, &FeatureExtract::cloudHandler, this);
+
+    pubCornerPoints = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_edge", 1);
+    pubSurfacePoints = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surf", 1);
+    pubFullPoints = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_filtered", 10);
+    pubLaserCloudInfo = nh.advertise<GC_LOAM::cloud_info>("/feature/cloud_info", 1);
+
+    allocateMemory();
+    resetParameters();
+  }
+  void allocateMemory()
+  {
+    laserCloudIn.reset(new pcl::PointCloud<PointXYZIRT>());
+    tmpOusterCloudIn.reset(new pcl::PointCloud<OusterPointXYZIRT>());
+    tmpRSCloudIn.reset(new pcl::PointCloud<rsPointXYZIRT>());
+    inputCloud.reset(new pcl::PointCloud<PointType>());
+    sampleCloud.reset(new pcl::PointCloud<PointType>());
+    fullCloud.reset(new pcl::PointCloud<PointType>());
+    extractedCloud.reset(new pcl::PointCloud<PointType>());
+
+    fullCloud->points.resize(N_SCAN * Horizon_SCAN);
+
+    cloudInfo.startRingIndex.assign(N_SCAN, 0);
+    cloudInfo.endRingIndex.assign(N_SCAN, 0);
+
+    cloudInfo.pointColInd.assign(N_SCAN * Horizon_SCAN, 0);
+    cloudInfo.pointRange.assign(N_SCAN * Horizon_SCAN, 0);
+
+    cloudSmoothness.resize(N_SCAN * Horizon_SCAN);
+
+    downSizeFilter.setLeafSize(odometrySurfLeafSize, odometrySurfLeafSize, odometrySurfLeafSize);
+
+    extractedCloud.reset(new pcl::PointCloud<PointType>());
+    cornerCloud.reset(new pcl::PointCloud<PointType>());
+    surfaceCloud.reset(new pcl::PointCloud<PointType>());
+
+    cloudCurvature = new float[N_SCAN * Horizon_SCAN];
+    cloudNeighborPicked = new int[N_SCAN * Horizon_SCAN];
+    cloudLabel = new int[N_SCAN * Horizon_SCAN];
+
+    resetParameters();
+  }
+
+  void resetParameters()
+  {
+    laserCloudIn->clear();
+    extractedCloud->clear();
+    inputCloud->clear();
+    sampleCloud->clear();
+    // reset range matrix for range image projection
+    rangeMat = cv::Mat(N_SCAN, Horizon_SCAN, CV_32F, cv::Scalar::all(FLT_MAX));
+    columnIdnCountVec.assign(N_SCAN, 0);
+  }
+
+  void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
+  {
+    ros::Time t1 = ros::Time::now();
+    if (!cachePointCloud(laserCloudMsg))
+      return;
+
+    if (feature_enabled)
+    {
+      projectPointCloud();
+
+      cloudExtraction();
+
+      calculateSmoothness();
+
+      markOccludedPoints();
+
+      extractFeatures();
+
+      publishFeatureCloud();
+      ros::Time t2 = ros::Time::now();
+      // std::cout << "laserCloudInfoHandler takes: " << (t2 - t1).toSec() * 1000 << "ms" << std::endl;
+      resetParameters();
+    }
+    else
+    {
+      samplePointCloud();
+      publishSampleCloud();
     }
   }
-
-  // idx = 0;
-  // int last_stat = -1;
-  // for(uint i=0; i<plsize; i++)
-  // {
-  //   PointType &ap = pl_orig[i];
-  //   // pl_full.push_back(ap);
-  //   double leng = sqrt(ap.x*ap.x + ap.y*ap.y);
-  //   if(leng < blind)
-  //   {
-  //     continue;
-  //   }
-
-  //   double ang = atan(ap.z / leng)*rad2deg;
-  //   scanID = int((ang + 15) / 2 + 0.5);
-
-  //   if(scanID>=N_SCANS || scanID<0)
-  //   {
-  //     continue;
-  //   }
-
-  //   if(orders[scanID] <= last_stat)
-  //   {
-  //     idx++;
-  //   }
-
-  //   pl_buff[scanID][idx].x = ap.x;
-  //   pl_buff[scanID][idx].y = ap.y;
-  //   pl_buff[scanID][idx].z = ap.z;
-  //   pl_buff[scanID][idx].intensity = ap.intensity;
-
-  //   last_stat = orders[scanID];
-  // }
-
-  idx++;
-
-  for (int j = 0; j < N_SCANS; j++)
+#define TEST_LIO_SAM_6AXIS_DATA
+  bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
   {
-    pcl::PointCloud<PointType> &pl = pl_buff[j];
-    vector<orgtype> &types = typess[j];
-    pl.erase(pl.begin() + idx, pl.end());
-    types.erase(types.begin() + idx, types.end());
-    plsize = idx - 1;
-    for (uint i = 0; i < plsize; i++)
+    sensor_msgs::PointCloud2 currentCloudMsg = *laserCloudMsg;
+    double timespan;
+    if (sensor == SensorType::VELODYNE)
     {
-      // types[i].range = sqrt(pl[i].x*pl[i].x + pl[i].y*pl[i].y);
-      vx = pl[i].x - pl[i + 1].x;
-      vy = pl[i].y - pl[i + 1].y;
-      vz = pl[i].z - pl[i + 1].z;
-      types[i].dista = vx * vx + vy * vy + vz * vz;
-    }
-    types[plsize].range = sqrt(pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y);
-
-    give_feature(pl, types, pl_corn, pl_surf);
-  }
-
-  pub_func(pl_full, pub_full, msg->header.stamp);
-  pub_func(pl_surf, pub_surf, msg->header.stamp);
-  pub_func(pl_corn, pub_corn, msg->header.stamp);
-}
-
-void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
-{
-  pcl::PointCloud<PointType> pl_orig;
-  pcl::fromROSMsg(*msg, pl_orig);
-
-  vector<pcl::PointCloud<PointType>> pl_buff(N_SCANS);
-  vector<vector<orgtype>> typess(N_SCANS);
-  pcl::PointCloud<PointType> pl_corn, pl_surf;
-
-  uint plsize = pl_orig.size();
-
-  pl_corn.reserve(plsize);
-  pl_surf.reserve(plsize);
-  for (int i = 0; i < N_SCANS; i++)
-  {
-    pl_buff[i].reserve(plsize);
-  }
-
-  for (uint i = 0; i < plsize; i += N_SCANS)
-  {
-    for (int j = 0; j < N_SCANS; j++)
-    {
-      pl_buff[j].push_back(pl_orig[i + j]);
-    }
-  }
-
-  for (int j = 0; j < N_SCANS; j++)
-  {
-    pcl::PointCloud<PointType> &pl = pl_buff[j];
-    vector<orgtype> &types = typess[j];
-    plsize = pl.size() - 1;
-    types.resize(plsize + 1);
-    for (uint i = 0; i < plsize; i++)
-    {
-      types[i].range = sqrt(pl[i].x * pl[i].x + pl[i].y * pl[i].y);
-      vx = pl[i].x - pl[i + 1].x;
-      vy = pl[i].y - pl[i + 1].y;
-      vz = pl[i].z - pl[i + 1].z;
-      types[i].dista = vx * vx + vy * vy + vz * vz;
-    }
-    types[plsize].range = sqrt(pl[plsize].x * pl[plsize].x + pl[plsize].y * pl[plsize].y);
-    give_feature(pl, types, pl_corn, pl_surf);
-  }
-
-  pub_func(pl_orig, pub_full, msg->header.stamp);
-  pub_func(pl_surf, pub_surf, msg->header.stamp);
-  pub_func(pl_corn, pub_corn, msg->header.stamp);
-}
-
-void give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &types, pcl::PointCloud<PointType> &pl_corn, pcl::PointCloud<PointType> &pl_surf)
-{
-  uint plsize = pl.size();
-  uint plsize2;
-  if (plsize == 0)
-  {
-    printf("something wrong\n");
-    return;
-  }
-  uint head = 0;
-
-  while (types[head].range < blind)
-  {
-    head++;
-  }
-
-  // Surf
-  plsize2 = (plsize > group_size) ? (plsize - group_size) : 0;
-
-  Eigen::Vector3d curr_direct(Eigen::Vector3d::Zero());
-  Eigen::Vector3d last_direct(Eigen::Vector3d::Zero());
-
-  uint i_nex = 0, i2;
-  uint last_i = 0;
-  uint last_i_nex = 0;
-  int last_state = 0;
-  int plane_type;
-
-  for (uint i = head; i < plsize2; i++)
-  {
-    if (types[i].range < blind)
-    {
-      continue;
-    }
-    // i_nex = i;
-    i2 = i;
-    // std::cout<<" i: "<<i<<" i_nex "<<i_nex<<"group_size: "<<group_size<<" plsize "<<plsize<<" plsize2 "<<plsize2<<std::endl;
-    plane_type = plane_judge(pl, types, i, i_nex, curr_direct);
-
-    if (plane_type == 1)
-    {
-      for (uint j = i; j <= i_nex; j++)
+      pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
+      inputCloud->points.resize(laserCloudIn->size());
+      inputCloud->is_dense = laserCloudIn->is_dense;
+#ifdef TEST_LIO_SAM_6AXIS_DATA
+      timespan = laserCloudIn->points.back().time;
+#else
+      timespan = laserCloudIn->points.back().time - laserCloudIn->points[0].time;
+#endif
+      for (size_t i = 0; i < laserCloudIn->size(); i++)
       {
-        if (j != i && j != i_nex)
+        auto &src = laserCloudIn->points[i];
+        auto &dst = inputCloud->points[i];
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.intensity = src.intensity;
+        dst.normal_y = src.ring; //  ring
+        dst.normal_z = timespan;
+#ifdef TEST_LIO_SAM_6AXIS_DATA
+        dst.normal_x = src.time / timespan;
+#else
+        dst.normal_x = (src.time + timespan) / timespan;
+#endif
+      }
+#ifndef TEST_LIO_SAM_6AXIS_DATA
+      timespan = 0.0;
+#endif
+      // std::cout << "stamp: " << laserCloudIn->points[0].time << "," << laserCloudIn->points[100].time
+      //           << ", " << laserCloudIn->points.back().time << "," << inputCloud->points.back().normal_x
+      //           << ", " << inputCloud->points.back().normal_z << std::endl;
+    }
+    else if (sensor == SensorType::LIVOX)
+    {
+      pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
+      inputCloud->points.resize(laserCloudIn->size());
+      inputCloud->is_dense = laserCloudIn->is_dense;
+      timespan = laserCloudIn->points.back().time;
+      for (size_t i = 0; i < laserCloudIn->size(); i++)
+      {
+        auto &src = laserCloudIn->points[i];
+        auto &dst = inputCloud->points[i];
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.intensity = src.intensity;
+        dst.normal_y = src.ring; //  ring
+        dst.normal_z = timespan;
+        dst.normal_x = src.time / timespan;
+      }
+      std::cout << "stamp: " << laserCloudIn->points[0].time << ", " << laserCloudIn->points.back().time << std::endl;
+    }
+    else if (sensor == SensorType::OUSTER)
+    {
+      // Convert to Velodyne format
+      pcl::fromROSMsg(currentCloudMsg, *tmpOusterCloudIn);
+      // pcl::moveFromROSMsg(currentCloudMsg, *tmpOusterCloudIn);
+      inputCloud->points.resize(tmpOusterCloudIn->size());
+      inputCloud->is_dense = tmpOusterCloudIn->is_dense;
+      //  FIXME:偶现,最后一个点时间戳异常
+      // timespan = tmpOusterCloudIn->points.back().t;
+      timespan = tmpOusterCloudIn->points[tmpOusterCloudIn->size() - 2].t;
+      for (size_t i = 0; i < tmpOusterCloudIn->size(); i++)
+      {
+        auto &src = tmpOusterCloudIn->points[i];
+        auto &dst = inputCloud->points[i];
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.intensity = src.intensity;
+        dst.normal_y = src.ring;
+        dst.normal_z = timespan;
+        dst.normal_x = src.t / timespan; //        *1e-9f;
+      }
+      timespan = timespan * 1e-9f;
+      // std::cout << std::endl;
+      // for (int i = tmpOusterCloudIn->size() - 6; i < tmpOusterCloudIn->size(); i++)
+      //     std::cout << tmpOusterCloudIn->points[i].t * 1e-9f << " ,";
+      // std::cout << std::endl;
+    }
+    else if (sensor == SensorType::ROBOSENSE)
+    {
+      //  FIXME: robosense时间戳为最后一个点的数据
+      pcl::fromROSMsg(currentCloudMsg, *tmpRSCloudIn);
+      // inputCloud->points.resize(tmpRSCloudIn->size());
+      // inputCloud->is_dense = tmpRSCloudIn->is_dense;
+      timespan = tmpRSCloudIn->points[tmpRSCloudIn->size() - 1].timestamp - tmpRSCloudIn->points[0].timestamp;
+      std::cout << "fist: " << tmpRSCloudIn->points[1].timestamp
+                << ", 100: " << tmpRSCloudIn->points[100].timestamp
+                << ",intervel: " << tmpRSCloudIn->points[tmpRSCloudIn->size() - 1].timestamp - tmpRSCloudIn->points[0].timestamp
+                << ",t: " << tmpRSCloudIn->points[0].timestamp - currentCloudMsg.header.stamp.toSec()
+                << "timespan: " << timespan << std::endl;
+      for (size_t i = 0; i < tmpRSCloudIn->size(); i++)
+      {
+        auto &src = tmpRSCloudIn->points[i];
+        if (!pcl_isfinite(src.x) || !pcl_isfinite(src.y) || !pcl_isfinite(src.z))
+          continue;
+
+        PointType dst;
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.intensity = src.intensity;
+        dst.normal_y = src.ring;
+        dst.normal_z = timespan;
+        dst.normal_x = (src.timestamp - tmpRSCloudIn->points[0].timestamp) / timespan;
+        inputCloud->push_back(dst);
+      }
+      timespan = 0.0;
+    }
+    else
+    {
+      ROS_ERROR_STREAM("Unknown sensor type: " << int(sensor));
+      ros::shutdown();
+    }
+
+    // get timestamp
+    cloudHeader = currentCloudMsg.header;
+    timeScanCur = cloudHeader.stamp.toSec();
+    timeScanEnd = timeScanCur + timespan; // inputCloud->points.back().normal_x;
+    // std::cout << "timeC:" << timeScanCur << "," << timespan << std::endl;
+
+    // check dense flag
+    if (inputCloud->is_dense == false)
+    {
+      ROS_ERROR("Point cloud is not in dense format, please remove NaN points first!");
+      ros::shutdown();
+    }
+
+    // check ring channel
+    static int ringFlag = 0;
+    if (ringFlag == 0)
+    {
+      ringFlag = -1;
+      for (int i = 0; i < (int)currentCloudMsg.fields.size(); ++i)
+      {
+        if (currentCloudMsg.fields[i].name == "ring")
         {
-          types[j].ftype = Real_Plane;
-        }
-        else
-        {
-          types[j].ftype = Poss_Plane;
+          ringFlag = 1;
+          break;
         }
       }
-
-      // if(last_state==1 && fabs(last_direct.sum())>0.5)
-      if (last_state == 1 && last_direct.norm() > 0.1)
+      if (ringFlag == -1)
       {
-        double mod = last_direct.transpose() * curr_direct;
-        if (mod > -0.707 && mod < 0.707)
-        {
-          types[i].ftype = Edge_Plane;
-        }
-        else
-        {
-          types[i].ftype = Real_Plane;
-        }
-      }
-
-      i = i_nex - 1;
-      last_state = 1;
-    }
-    else if (plane_type == 2)
-    {
-      i = i_nex;
-      last_state = 0;
-    }
-    else if (plane_type == 0)
-    {
-      if (last_state == 1)
-      {
-        uint i_nex_tem;
-        uint j;
-        for (j = last_i + 1; j <= last_i_nex; j++)
-        {
-          uint i_nex_tem2 = i_nex_tem;
-          Eigen::Vector3d curr_direct2;
-
-          uint ttem = plane_judge(pl, types, j, i_nex_tem, curr_direct2);
-
-          if (ttem != 1)
-          {
-            i_nex_tem = i_nex_tem2;
-            break;
-          }
-          curr_direct = curr_direct2;
-        }
-
-        if (j == last_i + 1)
-        {
-          last_state = 0;
-        }
-        else
-        {
-          for (uint k = last_i_nex; k <= i_nex_tem; k++)
-          {
-            if (k != i_nex_tem)
-            {
-              types[k].ftype = Real_Plane;
-            }
-            else
-            {
-              types[k].ftype = Poss_Plane;
-            }
-          }
-          i = i_nex_tem - 1;
-          i_nex = i_nex_tem;
-          i2 = j - 1;
-          last_state = 1;
-        }
+        ROS_ERROR("Point cloud ring channel not available, please configure your point cloud data!");
+        ros::shutdown();
       }
     }
 
-    last_i = i2;
-    last_i_nex = i_nex;
-    last_direct = curr_direct;
+    return true;
   }
 
-  plsize2 = plsize > 3 ? plsize - 3 : 0;
-  for (uint i = head + 3; i < plsize2; i++)
+  void samplePointCloud()
   {
-    if (types[i].range < blind || types[i].ftype >= Real_Plane)
+    sampleCloud->clear();
+    int cloudSize = inputCloud->points.size();
+    sampleCloud->reserve(cloudSize);
+    for (int i = 0; i < cloudSize; ++i)
     {
-      continue;
-    }
-
-    if (types[i - 1].dista < 1e-16 || types[i].dista < 1e-16)
-    {
-      continue;
-    }
-
-    Eigen::Vector3d vec_a(pl[i].x, pl[i].y, pl[i].z);
-    Eigen::Vector3d vecs[2];
-
-    for (int j = 0; j < 2; j++)
-    {
-      int m = -1;
-      if (j == 1)
-      {
-        m = 1;
-      }
-
-      if (types[i + m].range < blind)
-      {
-        if (types[i].range > inf_bound)
-        {
-          types[i].edj[j] = Nr_inf;
-        }
-        else
-        {
-          types[i].edj[j] = Nr_blind;
-        }
+      if (i % point_filter_num != 0)
         continue;
-      }
 
-      vecs[j] = Eigen::Vector3d(pl[i + m].x, pl[i + m].y, pl[i + m].z);
-      vecs[j] = vecs[j] - vec_a;
+      PointType thisPoint;
+      thisPoint.x = inputCloud->points[i].x;
+      thisPoint.y = inputCloud->points[i].y;
+      thisPoint.z = inputCloud->points[i].z;
+      thisPoint.intensity = inputCloud->points[i].intensity;
+      thisPoint.normal_x = inputCloud->points[i].normal_x;
+      thisPoint.normal_y = inputCloud->points[i].normal_y;
+      thisPoint.normal_z = inputCloud->points[i].normal_z;
 
-      types[i].angle[j] = vec_a.dot(vecs[j]) / vec_a.norm() / vecs[j].norm();
-      if (types[i].angle[j] < jump_up_limit)
-      {
-        types[i].edj[j] = Nr_180;
-      }
-      else if (types[i].angle[j] > jump_down_limit)
-      {
-        types[i].edj[j] = Nr_zero;
-      }
-    }
-
-    types[i].intersect = vecs[Prev].dot(vecs[Next]) / vecs[Prev].norm() / vecs[Next].norm();
-    if (types[i].edj[Prev] == Nr_nor && types[i].edj[Next] == Nr_zero && types[i].dista > 0.0225 && types[i].dista > 4 * types[i - 1].dista)
-    {
-      if (types[i].intersect > cos160)
-      {
-        if (edge_jump_judge(pl, types, i, Prev))
-        {
-          types[i].ftype = Edge_Jump;
-        }
-      }
-    }
-    else if (types[i].edj[Prev] == Nr_zero && types[i].edj[Next] == Nr_nor && types[i - 1].dista > 0.0225 && types[i - 1].dista > 4 * types[i].dista)
-    {
-      if (types[i].intersect > cos160)
-      {
-        if (edge_jump_judge(pl, types, i, Next))
-        {
-          types[i].ftype = Edge_Jump;
-        }
-      }
-    }
-    else if (types[i].edj[Prev] == Nr_nor && types[i].edj[Next] == Nr_inf)
-    {
-      if (edge_jump_judge(pl, types, i, Prev))
-      {
-        types[i].ftype = Edge_Jump;
-      }
-    }
-    else if (types[i].edj[Prev] == Nr_inf && types[i].edj[Next] == Nr_nor)
-    {
-      if (edge_jump_judge(pl, types, i, Next))
-      {
-        types[i].ftype = Edge_Jump;
-      }
-    }
-    else if (types[i].edj[Prev] > Nr_nor && types[i].edj[Next] > Nr_nor)
-    {
-      if (types[i].ftype == Nor)
-      {
-        types[i].ftype = Wire;
-      }
+      float range = pointDistance(thisPoint);
+      if (range < lidarMinRange || range > lidarMaxRange)
+        continue;
+      sampleCloud->push_back(thisPoint);
     }
   }
 
-  plsize2 = plsize - 1;
-  double ratio;
-  for (uint i = head + 1; i < plsize2; i++)
+  void projectPointCloud()
   {
-    if (types[i].range < blind || types[i - 1].range < blind || types[i + 1].range < blind)
+    int cloudSize = inputCloud->points.size();
+    // range image projection
+    for (int i = 0; i < cloudSize; ++i)
     {
-      continue;
-    }
+      PointType thisPoint;
+      thisPoint.x = inputCloud->points[i].x;
+      thisPoint.y = inputCloud->points[i].y;
+      thisPoint.z = inputCloud->points[i].z;
+      thisPoint.intensity = inputCloud->points[i].intensity;
+      thisPoint.normal_x = inputCloud->points[i].normal_x;
+      thisPoint.normal_y = inputCloud->points[i].normal_y;
+      thisPoint.normal_z = inputCloud->points[i].normal_z;
 
-    if (types[i - 1].dista < 1e-8 || types[i].dista < 1e-8)
-    {
-      continue;
-    }
+      float range = pointDistance(thisPoint);
+      if (range < lidarMinRange || range > lidarMaxRange)
+        continue;
 
-    if (types[i].ftype == Nor)
-    {
-      if (types[i - 1].dista > types[i].dista)
+      int rowIdn = inputCloud->points[i].normal_y;
+      if (rowIdn < 0 || rowIdn >= N_SCAN)
+        continue;
+
+      if (rowIdn % downsampleRate != 0)
+        continue;
+
+      int columnIdn = -1;
+      if (sensor == SensorType::LIVOX)
       {
-        ratio = types[i - 1].dista / types[i].dista;
+        columnIdn = columnIdnCountVec[rowIdn];
+        columnIdnCountVec[rowIdn] += 1;
       }
       else
       {
-        ratio = types[i].dista / types[i - 1].dista;
+        float horizonAngle = atan2(thisPoint.x, thisPoint.y) * 180 / M_PI;
+
+        static float ang_res_x = 360.0 / float(Horizon_SCAN);
+        columnIdn = -round((horizonAngle - 90.0) / ang_res_x) + Horizon_SCAN / 2;
+        if (columnIdn >= Horizon_SCAN)
+          columnIdn -= Horizon_SCAN;
       }
 
-      if (types[i].intersect < smallp_intersect && ratio < smallp_ratio)
+      if (columnIdn < 0 || columnIdn >= Horizon_SCAN)
+        continue;
+
+      if (rangeMat.at<float>(rowIdn, columnIdn) != FLT_MAX)
+        continue;
+      // TODO: add deskew here
+
+      rangeMat.at<float>(rowIdn, columnIdn) = range;
+
+      int index = columnIdn + rowIdn * Horizon_SCAN;
+      fullCloud->points[index] = thisPoint;
+    }
+  }
+
+  void cloudExtraction()
+  {
+    int count = 0;
+    // extract segmented cloud for lidar odometry
+    for (int i = 0; i < N_SCAN; ++i)
+    {
+      cloudInfo.startRingIndex[i] = count - 1 + 5;
+
+      for (int j = 0; j < Horizon_SCAN; ++j)
       {
-        if (types[i - 1].ftype == Nor)
+        if (rangeMat.at<float>(i, j) != FLT_MAX)
         {
-          types[i - 1].ftype = Real_Plane;
+          // mark the points' column index for marking occlusion later
+          cloudInfo.pointColInd[count] = j;
+          // save range info
+          cloudInfo.pointRange[count] = rangeMat.at<float>(i, j);
+          // save extracted cloud
+          extractedCloud->push_back(fullCloud->points[j + i * Horizon_SCAN]);
+          // size of extracted cloud
+          ++count;
         }
-        if (types[i + 1].ftype == Nor)
+      }
+      cloudInfo.endRingIndex[i] = count - 1 - 5;
+    }
+  }
+
+  void calculateSmoothness()
+  {
+    int cloudSize = extractedCloud->points.size();
+    for (int i = 5; i < cloudSize - 5; i++)
+    {
+      float diffRange = cloudInfo.pointRange[i - 5] + cloudInfo.pointRange[i - 4] + cloudInfo.pointRange[i - 3] + cloudInfo.pointRange[i - 2] + cloudInfo.pointRange[i - 1] - cloudInfo.pointRange[i] * 10 + cloudInfo.pointRange[i + 1] + cloudInfo.pointRange[i + 2] + cloudInfo.pointRange[i + 3] + cloudInfo.pointRange[i + 4] + cloudInfo.pointRange[i + 5];
+
+      cloudCurvature[i] = diffRange * diffRange; // diffX * diffX + diffY * diffY + diffZ * diffZ;
+
+      cloudNeighborPicked[i] = 0;
+      cloudLabel[i] = 0;
+      // cloudSmoothness for sorting
+      cloudSmoothness[i].value = cloudCurvature[i];
+      cloudSmoothness[i].ind = i;
+    }
+  }
+
+  void markOccludedPoints()
+  {
+    int cloudSize = extractedCloud->points.size();
+    // mark occluded points and parallel beam points
+    for (int i = 5; i < cloudSize - 6; ++i)
+    {
+      // occluded points
+      float depth1 = cloudInfo.pointRange[i];
+      float depth2 = cloudInfo.pointRange[i + 1];
+      int columnDiff = std::abs(int(cloudInfo.pointColInd[i + 1] - cloudInfo.pointColInd[i]));
+
+      if (columnDiff < 10)
+      {
+        // 10 pixel diff in range image
+        if (depth1 - depth2 > 0.3)
         {
-          types[i + 1].ftype = Real_Plane;
+          cloudNeighborPicked[i - 5] = 1;
+          cloudNeighborPicked[i - 4] = 1;
+          cloudNeighborPicked[i - 3] = 1;
+          cloudNeighborPicked[i - 2] = 1;
+          cloudNeighborPicked[i - 1] = 1;
+          cloudNeighborPicked[i] = 1;
         }
-        types[i].ftype = Real_Plane;
-      }
-    }
-  }
-
-  // int last_surface = 0;
-  // for(uint i=0; i<plsize; i++)
-  // {
-  //   if(types[i].ftype==Poss_Plane || types[i].ftype==Real_Plane)
-  //   {
-  //     if(last_surface == 0)
-  //     {
-  //       pl_surf.push_back(pl[i]);
-  //       last_surface = 1;
-  //     }
-  //     else
-  //     {
-  //       last_surface = 0;
-  //     }
-
-  //   }
-  //   else if(types[i].ftype==Edge_Jump || types[i].ftype==Edge_Plane)
-  //   {
-  //     pl_corn.push_back(pl[i]);
-  //   }
-
-  // }
-
-  int last_surface = -1;
-  for (uint j = head; j < plsize; j++)
-  {
-    if (types[j].ftype == Poss_Plane || types[j].ftype == Real_Plane)
-    {
-      if (last_surface == -1)
-      {
-        last_surface = j;
-      }
-
-      if (j == uint(last_surface + point_filter_num - 1))
-      {
-        // for(uint k=last_surface; k<=j; k++)
-        // {
-        //   PointType ap;
-        //   ap.x = pl[k].x;
-        //   ap.y = pl[k].y;
-        //   ap.z = pl[k].z;
-        //   ap.curvature = pl[k].curvature;
-        //   ap.intensity = pl[k].intensity;
-        //   pl_surf.push_back(ap);
-        // }
-
-        PointType ap;
-        ap.x = pl[j].x;
-        ap.y = pl[j].y;
-        ap.z = pl[j].z;
-        ap.curvature = pl[j].curvature;
-        pl_surf.push_back(ap);
-
-        last_surface = -1;
-      }
-    }
-    else
-    {
-      if (types[j].ftype == Edge_Jump || types[j].ftype == Edge_Plane)
-      {
-        pl_corn.push_back(pl[j]);
-      }
-      if (last_surface != -1)
-      {
-        PointType ap;
-        for (uint k = last_surface; k < j; k++)
+        else if (depth2 - depth1 > 0.3)
         {
-          ap.x += pl[k].x;
-          ap.y += pl[k].y;
-          ap.z += pl[k].z;
-          ap.curvature += pl[k].curvature;
+          cloudNeighborPicked[i + 1] = 1;
+          cloudNeighborPicked[i + 2] = 1;
+          cloudNeighborPicked[i + 3] = 1;
+          cloudNeighborPicked[i + 4] = 1;
+          cloudNeighborPicked[i + 5] = 1;
+          cloudNeighborPicked[i + 6] = 1;
         }
-        ap.x /= (j - last_surface);
-        ap.y /= (j - last_surface);
-        ap.z /= (j - last_surface);
-        ap.curvature /= (j - last_surface);
-        pl_surf.push_back(ap);
       }
-      last_surface = -1;
-    }
-  }
-}
+      // parallel beam
+      float diff1 = std::abs(float(cloudInfo.pointRange[i - 1] - cloudInfo.pointRange[i]));
+      float diff2 = std::abs(float(cloudInfo.pointRange[i + 1] - cloudInfo.pointRange[i]));
 
-void pub_func(pcl::PointCloud<PointType> &pl, ros::Publisher pub, const ros::Time &ct)
-{
-  pl.height = 1;
-  pl.width = pl.size();
-  sensor_msgs::PointCloud2 output;
-  pcl::toROSMsg(pl, output);
-  output.header.frame_id = "livox";
-  output.header.stamp = ct;
-  pub.publish(output);
-}
-
-int plane_judge(const pcl::PointCloud<PointType> &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct)
-{
-  double group_dis = disA * types[i_cur].range + disB;
-  group_dis = group_dis * group_dis;
-  // i_nex = i_cur;
-
-  double two_dis;
-  vector<double> disarr;
-  disarr.reserve(20);
-
-  for (i_nex = i_cur; i_nex < i_cur + group_size; i_nex++)
-  {
-    if (types[i_nex].range < blind)
-    {
-      curr_direct.setZero();
-      return 2;
-    }
-    disarr.push_back(types[i_nex].dista);
-  }
-
-  for (;;)
-  {
-    if ((i_cur >= pl.size()) || (i_nex >= pl.size()))
-      break;
-
-    if (types[i_nex].range < blind)
-    {
-      curr_direct.setZero();
-      return 2;
-    }
-    vx = pl[i_nex].x - pl[i_cur].x;
-    vy = pl[i_nex].y - pl[i_cur].y;
-    vz = pl[i_nex].z - pl[i_cur].z;
-    two_dis = vx * vx + vy * vy + vz * vz;
-    if (two_dis >= group_dis)
-    {
-      break;
-    }
-    disarr.push_back(types[i_nex].dista);
-    i_nex++;
-  }
-
-  double leng_wid = 0;
-  double v1[3], v2[3];
-  for (uint j = i_cur + 1; j < i_nex; j++)
-  {
-    if ((j >= pl.size()) || (i_cur >= pl.size()))
-      break;
-    v1[0] = pl[j].x - pl[i_cur].x;
-    v1[1] = pl[j].y - pl[i_cur].y;
-    v1[2] = pl[j].z - pl[i_cur].z;
-
-    v2[0] = v1[1] * vz - vy * v1[2];
-    v2[1] = v1[2] * vx - v1[0] * vz;
-    v2[2] = v1[0] * vy - vx * v1[1];
-
-    double lw = v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2];
-    if (lw > leng_wid)
-    {
-      leng_wid = lw;
+      if (diff1 > 0.02 * cloudInfo.pointRange[i] && diff2 > 0.02 * cloudInfo.pointRange[i])
+        cloudNeighborPicked[i] = 1;
     }
   }
 
-  if ((two_dis * two_dis / leng_wid) < p2l_ratio)
+  void extractFeatures()
   {
-    curr_direct.setZero();
-    return 0;
-  }
+    cornerCloud->clear();
+    surfaceCloud->clear();
 
-  uint disarrsize = disarr.size();
-  for (uint j = 0; j < disarrsize - 1; j++)
-  {
-    for (uint k = j + 1; k < disarrsize; k++)
+    pcl::PointCloud<PointType>::Ptr surfaceCloudScan(new pcl::PointCloud<PointType>());
+    pcl::PointCloud<PointType>::Ptr surfaceCloudScanDS(new pcl::PointCloud<PointType>());
+
+    for (int i = 0; i < N_SCAN; i++)
     {
-      if (disarr[j] < disarr[k])
+
+      surfaceCloudScan->clear();
+
+      for (int j = 0; j < 6; j++)
       {
-        leng_wid = disarr[j];
-        disarr[j] = disarr[k];
-        disarr[k] = leng_wid;
+
+        int sp = (cloudInfo.startRingIndex[i] * (6 - j) + cloudInfo.endRingIndex[i] * j) / 6;
+        int ep = (cloudInfo.startRingIndex[i] * (5 - j) + cloudInfo.endRingIndex[i] * (j + 1)) / 6 - 1;
+
+        if (sp >= ep)
+          continue;
+
+        std::sort(cloudSmoothness.begin() + sp, cloudSmoothness.begin() + ep, by_value());
+
+        int largestPickedNum = 0;
+        for (int k = ep; k >= sp; k--)
+        {
+          int ind = cloudSmoothness[k].ind;
+          if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] > edgeThreshold)
+          {
+            largestPickedNum++;
+            if (largestPickedNum <= 20)
+            {
+              cloudLabel[ind] = 1;
+              extractedCloud->points[ind].normal_z = 1.0; //   for corner
+              cornerCloud->push_back(extractedCloud->points[ind]);
+            }
+            else
+            {
+              break;
+            }
+
+            cloudNeighborPicked[ind] = 1;
+            for (int l = 1; l <= 5; l++)
+            {
+              int columnDiff = std::abs(int(cloudInfo.pointColInd[ind + l] - cloudInfo.pointColInd[ind + l - 1]));
+              if (columnDiff > 10)
+                break;
+              cloudNeighborPicked[ind + l] = 1;
+            }
+            for (int l = -1; l >= -5; l--)
+            {
+              int columnDiff = std::abs(int(cloudInfo.pointColInd[ind + l] - cloudInfo.pointColInd[ind + l + 1]));
+              if (columnDiff > 10)
+                break;
+              cloudNeighborPicked[ind + l] = 1;
+            }
+          }
+        }
+
+        for (int k = sp; k <= ep; k++)
+        {
+          int ind = cloudSmoothness[k].ind;
+          if (cloudNeighborPicked[ind] == 0 && cloudCurvature[ind] < surfThreshold)
+          {
+
+            cloudLabel[ind] = -1;
+            cloudNeighborPicked[ind] = 1;
+
+            for (int l = 1; l <= 5; l++)
+            {
+
+              int columnDiff = std::abs(int(cloudInfo.pointColInd[ind + l] - cloudInfo.pointColInd[ind + l - 1]));
+              if (columnDiff > 10)
+                break;
+
+              cloudNeighborPicked[ind + l] = 1;
+            }
+            for (int l = -1; l >= -5; l--)
+            {
+
+              int columnDiff = std::abs(int(cloudInfo.pointColInd[ind + l] - cloudInfo.pointColInd[ind + l + 1]));
+              if (columnDiff > 10)
+                break;
+
+              cloudNeighborPicked[ind + l] = 1;
+            }
+          }
+        }
+
+        for (int k = sp; k <= ep; k++)
+        {
+          if (cloudLabel[k] <= 0)
+          {
+            extractedCloud->points[k].normal_z = 2.0; //   for surf
+            surfaceCloudScan->push_back(extractedCloud->points[k]);
+          }
+        }
       }
+
+      surfaceCloudScanDS->clear();
+      downSizeFilter.setInputCloud(surfaceCloudScan);
+      downSizeFilter.filter(*surfaceCloudScanDS);
+
+      *surfaceCloud += *surfaceCloudScanDS;
     }
   }
 
-  if (disarr[disarr.size() - 2] < 1e-16)
+  void freeCloudInfoMemory()
   {
-    curr_direct.setZero();
-    return 0;
+    cloudInfo.startRingIndex.clear();
+    cloudInfo.endRingIndex.clear();
+    cloudInfo.pointColInd.clear();
+    cloudInfo.pointRange.clear();
   }
 
-  if (lidar_type == MID || lidar_type == HORIZON)
+  void publishFeatureCloud()
   {
-    double dismax_mid = disarr[0] / disarr[disarrsize / 2];
-    double dismid_min = disarr[disarrsize / 2] / disarr[disarrsize - 2];
-
-    if (dismax_mid >= limit_maxmid || dismid_min >= limit_midmin)
-    {
-      curr_direct.setZero();
-      return 0;
-    }
-  }
-  else
-  {
-    double dismax_min = disarr[0] / disarr[disarrsize - 2];
-    if (dismax_min >= limit_maxmin)
-    {
-      curr_direct.setZero();
-      return 0;
-    }
+    // free cloud info memory
+    // std::cout << "surf: " << surfaceCloud->size() << std::endl;
+    freeCloudInfoMemory();
+    // std::cout << "edge: " << cornerCloud->size() << std::endl;
+    // save newly extracted features
+    cloudInfo.cloud_corner = publishCloud(&pubCornerPoints, cornerCloud, cloudHeader.stamp, lidarFrame);
+    cloudInfo.cloud_surface = publishCloud(&pubSurfacePoints, surfaceCloud, cloudHeader.stamp, lidarFrame);
+    // cloudHeader.stamp = ros::Time().fromSec(timeScanEnd); // lio used
+    // publishCloud(&pubFullPoints, extractedCloud, cloudHeader.stamp, lidarFrame);
+    // publish to mapOptimization
+    pubLaserCloudInfo.publish(cloudInfo);
   }
 
-  curr_direct << vx, vy, vz;
-  curr_direct.normalize();
-  return 1;
-}
+  void publishSampleCloud()
+  {
+    publishCloud(&pubSurfacePoints, sampleCloud, cloudHeader.stamp, lidarFrame);
+  }
+};
 
-bool edge_jump_judge(const pcl::PointCloud<PointType> &pl, vector<orgtype> &types, uint i, Surround nor_dir)
+int main(int argc, char **argv)
 {
-  if (nor_dir == 0)
-  {
-    if (types[i - 1].range < blind || types[i - 2].range < blind)
-    {
-      return false;
-    }
-  }
-  else if (nor_dir == 1)
-  {
-    if (types[i + 1].range < blind || types[i + 2].range < blind)
-    {
-      return false;
-    }
-  }
-  double d1 = types[i + nor_dir - 1].dista;
-  double d2 = types[i + 3 * nor_dir - 2].dista;
-  double d;
+  ros::init(argc, argv, "ESKF_LIO");
 
-  if (d1 < d2)
-  {
-    d = d1;
-    d1 = d2;
-    d2 = d;
-  }
+  FeatureExtract FE;
 
-  d1 = sqrt(d1);
-  d2 = sqrt(d2);
+  ROS_INFO("\033[1;32m----> Feature Extraction Started.\033[0m");
 
-  if (d1 > edgea * d2 || (d1 - d2) > edgeb)
-  {
-    return false;
-  }
+  ros::spin();
 
-  return true;
+  return 0;
 }
