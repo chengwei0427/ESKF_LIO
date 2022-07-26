@@ -72,20 +72,10 @@ std::string root_dir = ROOT_DIR;
 
 int iterCount = 0;
 int NUM_MAX_ITERATIONS = 0;
-int FOV_RANGE = 3; // range of FOV = FOV_RANGE * cube_len
-int laserCloudCenWidth = 24;
-int laserCloudCenHeight = 24;
-int laserCloudCenDepth = 24;
 
-int laserCloudValidNum = 0;
 int laserCloudSelNum = 0;
 
-const int laserCloudWidth = 48;
-const int laserCloudHeight = 48;
-const int laserCloudDepth = 48;
-const int laserCloudNum = laserCloudWidth * laserCloudHeight * laserCloudDepth;
-
-std::vector<double> T1, T2, s_plot, s_plot2, s_plot3, s_plot4, s_plot5, s_plot6;
+double filter_size_surf_min;
 
 /// IMU relative variables
 std::mutex mtx_buffer;
@@ -93,7 +83,6 @@ std::condition_variable sig_buffer;
 bool lidar_pushed = false;
 bool flg_exit = false;
 bool flg_reset = false;
-bool flg_map_inited = false;
 
 /// Buffers for measurements
 double cube_len = 0.0;
@@ -104,38 +93,28 @@ double last_timestamp_imu = -1;
 double res_mean_last = 0.05;
 double total_distance = 0.0;
 auto position_last = Zero3d;
-double copy_time, readd_time;
 
 std::deque<sensor_msgs::PointCloud2::ConstPtr> lidar_buffer;
 std::deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
-
-std::vector<std::vector<int>> pointSearchInd_surf;
 
 // surf feature in map
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
 
-PointType pointOri, pointSel, coeff;
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_world(new PointCloudXYZI());
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI());
 PointCloudXYZI::Ptr coeffSel(new PointCloudXYZI());
 pcl::VoxelGrid<PointType> downSizeFilterSurf;
-pcl::VoxelGrid<PointType> downSizeFilterMap;
 
 bool dense_map_en, flg_EKF_inited = 0, flg_EKF_converged = 0;
 // all points
 PointCloudXYZI::Ptr laserCloudFullRes2(new PointCloudXYZI());
-PointCloudXYZI::Ptr featsArray[laserCloudNum];
-bool _last_inFOV[laserCloudNum];
-bool cube_updated[laserCloudNum];
-int laserCloudValidInd[laserCloudNum];
+
 pcl::PointCloud<pcl::PointXYZI>::Ptr laserCloudFullResColor(new pcl::PointCloud<pcl::PointXYZI>());
 
 KD_TREE<PointType> ikdtree;
-
-pcl::KdTreeFLANN<PointType>::Ptr kdtreeSurfFromMap(new pcl::KdTreeFLANN<PointType>());
 
 Eigen::Vector3f XAxisPoint_body(LIDAR_SP_LEN, 0.0, 0.0);
 Eigen::Vector3f XAxisPoint_world(LIDAR_SP_LEN, 0.0, 0.0);
@@ -187,11 +166,6 @@ void RGBpointBodyToWorld(PointType const *const pi, pcl::PointXYZI *const po)
     intensity = intensity - std::floor(intensity);
 
     int reflection_map = intensity * 10000;
-}
-
-int cube_ind(const int &i, const int &j, const int &k)
-{
-    return (i + laserCloudWidth * j + laserCloudWidth * laserCloudHeight * k);
 }
 
 void points_cache_collect()
@@ -271,14 +245,12 @@ void lasermap_fov_segment()
 void feat_points_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
     mtx_buffer.lock();
-    // std::cout<<"got feature"<<std::endl;
     if (msg->header.stamp.toSec() < last_timestamp_lidar)
     {
         ROS_ERROR("lidar loop back, clear buffer");
         lidar_buffer.clear();
     }
 
-    // ROS_INFO("get point cloud at time: %.6f", msg->header.stamp.toSec());
     lidar_buffer.push_back(msg);
     last_timestamp_lidar = msg->header.stamp.toSec();
 
@@ -323,7 +295,7 @@ bool sync_packages(MeasureGroup &meas)
         pcl::fromROSMsg(*(lidar_buffer.front()), *(meas.lidar));
         meas.lidar_beg_time = lidar_buffer.front()->header.stamp.toSec();
         lidar_end_time = meas.lidar_beg_time + meas.lidar->points.back().normal_z; //  normal_z存储timespan
-        std::cout << "timespan: " << meas.lidar->points.back().normal_z << ", point end ratio: " << meas.lidar->points.back().normal_x << std::endl;
+        // std::cout << "timespan: " << meas.lidar->points.back().normal_z << ", point end ratio: " << meas.lidar->points.back().normal_x << std::endl;
         lidar_pushed = true;
     }
 
@@ -353,7 +325,7 @@ bool sync_packages(MeasureGroup &meas)
 
 vector<PointVector> Nearest_Points;
 double filter_size_map_min = 0;
-int process_increments = 0, feats_down_size = 0, add_point_size = 0;
+int feats_down_size = 0, add_point_size = 0;
 void map_incremental()
 {
     PointVector PointToAdd;
@@ -408,10 +380,20 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "laserMapping");
     ros::NodeHandle nh;
+    std::string imu_topic;
+
+    /*** variables initialize ***/
+    nh.param<std::string>("common/imuTopic", imu_topic, "/livox/imu");
+    nh.param<bool>("mapping/dense_map_enable", dense_map_en, false);
+    nh.param<int>("mapping/max_iteration", NUM_MAX_ITERATIONS, 10);
+    nh.param<double>("mapping/filter_size_surf", filter_size_surf_min, 0.5);
+    nh.param<double>("mapping/filter_size_map", filter_size_map_min, 0.5);
+    nh.param<double>("mapping/cube_side_length", cube_len, 1000);
+
     ROS_INFO("\033[1;32m----> ESKF_LIO mapping Started.\033[0m");
 
     ros::Subscriber sub_pcl = nh.subscribe("/laser_cloud_surf", 20000, feat_points_cbk);
-    ros::Subscriber sub_imu = nh.subscribe("/livox/imu", 20000, imu_cbk);
+    ros::Subscriber sub_imu = nh.subscribe(imu_topic, 20000, imu_cbk);
     ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100);
     ros::Publisher pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100);
     ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/Laser_map", 100);
@@ -425,9 +407,7 @@ int main(int argc, char **argv)
 
     /*** variables definition ***/
 
-    int effect_feat_num = 0, frame_num = 0;
-    double filter_size_surf_min, fov_deg,
-        deltaT, deltaR, aver_time_consu = 0, first_lidar_time = 0;
+    double deltaT, deltaR, first_lidar_time = 0;
     Eigen::Matrix<double, DIM_OF_STATES, DIM_OF_STATES> G, H_T_H, I_STATE;
     G.setZero();
     H_T_H.setZero();
@@ -440,20 +420,7 @@ int main(int argc, char **argv)
     cv::Mat matV1(3, 3, CV_32F, cv::Scalar::all(0));
     cv::Mat matP(6, 6, CV_32F, cv::Scalar::all(0));
 
-    /*** variables initialize ***/
-    ros::param::get("~dense_map_enable", dense_map_en);
-    ros::param::get("~max_iteration", NUM_MAX_ITERATIONS);
-    ros::param::get("~filter_size_surf", filter_size_surf_min);
-    ros::param::get("~filter_size_map", filter_size_map_min);
-    ros::param::get("~cube_side_length", cube_len);
-
-    for (int i = 0; i < laserCloudNum; i++)
-    {
-        featsArray[i].reset(new PointCloudXYZI());
-    }
-
     downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min);
-    downSizeFilterMap.setLeafSize(filter_size_map_min, filter_size_map_min, filter_size_map_min);
 
     std::shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
@@ -484,12 +451,6 @@ int main(int argc, char **argv)
                 flg_reset = false;
                 continue;
             }
-
-            double t0, t1, t2, t3, t4, t5, match_start, match_time, solve_start, solve_time, pca_time, svd_time;
-            match_time = 0;
-            solve_time = 0;
-            pca_time = 0;
-            svd_time = 0;
 
             p_imu->Process(Measures, state, feats_undistort);
             StatesGroup state_propagat(state);
@@ -546,8 +507,7 @@ int main(int argc, char **argv)
             int featsFromMapNum = ikdtree.validnum();
 
             std::cout << "[ mapping ]: Raw feature num: " << feats_undistort->points.size() << " downsamp num "
-                      << feats_down_size << " Map num: " << featsFromMapNum
-                      << " laserCloudValidNum " << laserCloudValidNum << std::endl;
+                      << feats_down_size << " Map num: " << featsFromMapNum << std::endl;
 
             /*** ICP and iterated Kalman filter update ***/
             PointCloudXYZI::Ptr coeffSel_tmpt(new PointCloudXYZI(*feats_down));
@@ -560,12 +520,10 @@ int main(int argc, char **argv)
                 normvec->resize(feats_down_size);
                 feats_down_world->resize(feats_down_size);
 
-                pointSearchInd_surf.resize(feats_down_size);
                 Nearest_Points.resize(feats_down_size);
 
                 std::vector<bool> point_selected_surf(feats_down_size, true);
 
-                bool nearest_search_en = true;
                 int rematch_num = 0;
                 bool rematch_en = 0;
                 flg_EKF_converged = 0;
@@ -923,13 +881,6 @@ int main(int argc, char **argv)
             msg_body_pose.header.frame_id = "/camera_init";
             path.poses.push_back(msg_body_pose);
             pubPath.publish(path);
-
-            /*** save debug variables ***/
-            frame_num++;
-
-            // std::cout<<"[ mapping ]: time: copy map "<<copy_time<<" readd: "<<readd_time<<" match "<<match_time<<" solve "<<solve_time<<"acquire: "<<t4-t3<<" map incre "<<t5-t4<<" total "<<aver_time_consu<<std::endl;
-            // fout_out << std::setw(10) << Measures.lidar_beg_time << " " << euler_cur.transpose()*57.3 << " " << state.pos_end.transpose() << " " << state.vel_end.transpose() \
-            // <<" "<<state.bias_g.transpose()<<" "<<state.bias_a.transpose()<< std::endl;
         }
         status = ros::ok();
         rate.sleep();

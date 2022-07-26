@@ -104,8 +104,6 @@ public:
 
   // voxel filter paprams
   float odometrySurfLeafSize;
-  float mappingCornerLeafSize;
-  float mappingSurfLeafSize;
 
   // CPU Params
   int numberOfCores;
@@ -123,11 +121,11 @@ public:
 
   FeatureExtract()
   {
-    nh.param<std::string>("pointCloudTopic", pointCloudTopic, "points_raw");
-    nh.param<std::string>("lidarFrame", lidarFrame, "base_link");
+    nh.param<std::string>("common/pointCloudTopic", pointCloudTopic, "points_raw");
+    nh.param<std::string>("feature_extract/lidarFrame", lidarFrame, "base_link");
 
     std::string sensorStr;
-    nh.param<std::string>("sensor", sensorStr, "");
+    nh.param<std::string>("feature_extract/sensor", sensorStr, "");
     if (sensorStr == "velodyne")
     {
       sensor = SensorType::VELODYNE;
@@ -150,22 +148,20 @@ public:
           "Invalid sensor type (must be either 'velodyne' 'ouster' 'robosense' or 'livox'): " << sensorStr);
       ros::shutdown();
     }
-    nh.param<int>("N_SCAN", N_SCAN, 16);
-    nh.param<int>("Horizon_SCAN", Horizon_SCAN, 1800);
-    nh.param<int>("downsampleRate", downsampleRate, 1);
-    nh.param<int>("pointFilterRate", point_filter_num, 1);
-    nh.param<float>("lidarMinRange", lidarMinRange, 1.0);
-    nh.param<int>("feature_enabled", feature_enabled, 1);
-    nh.param<float>("lidarMaxRange", lidarMaxRange, 1000.0);
+    nh.param<int>("feature_extract/N_SCAN", N_SCAN, 16);
+    nh.param<int>("feature_extract/Horizon_SCAN", Horizon_SCAN, 1800);
+    nh.param<int>("feature_extract/downsampleRate", downsampleRate, 1);
+    nh.param<int>("feature_extract/pointFilterRate", point_filter_num, 1);
+    nh.param<float>("feature_extract/lidarMinRange", lidarMinRange, 1.0);
+    nh.param<int>("feature_extract/feature_enabled", feature_enabled, 1);
+    nh.param<float>("feature_extract/lidarMaxRange", lidarMaxRange, 1000.0);
 
-    nh.param<float>("edgeThreshold", edgeThreshold, 0.1);
-    nh.param<float>("surfThreshold", surfThreshold, 0.1);
-    nh.param<int>("edgeFeatureMinValidNum", edgeFeatureMinValidNum, 10);
-    nh.param<int>("surfFeatureMinValidNum", surfFeatureMinValidNum, 100);
+    nh.param<float>("feature_extract/edgeThreshold", edgeThreshold, 0.1);
+    nh.param<float>("feature_extract/surfThreshold", surfThreshold, 0.1);
+    nh.param<int>("feature_extract/edgeFeatureMinValidNum", edgeFeatureMinValidNum, 10);
+    nh.param<int>("feature_extract/surfFeatureMinValidNum", surfFeatureMinValidNum, 100);
 
-    nh.param<float>("odometrySurfLeafSize", odometrySurfLeafSize, 0.2);
-    nh.param<float>("mappingCornerLeafSize", mappingCornerLeafSize, 0.2);
-    nh.param<float>("mappingSurfLeafSize", mappingSurfLeafSize, 0.2);
+    nh.param<float>("feature_extract/odometrySurfLeafSize", odometrySurfLeafSize, 0.2);
 
     subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 50, &FeatureExtract::cloudHandler, this);
 
@@ -250,7 +246,7 @@ public:
       publishSampleCloud();
     }
   }
-#define TEST_LIO_SAM_6AXIS_DATA
+  // #define TEST_LIO_SAM_6AXIS_DATA
   bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
   {
     sensor_msgs::PointCloud2 currentCloudMsg = *laserCloudMsg;
@@ -327,7 +323,7 @@ public:
         dst.z = src.z;
         dst.intensity = src.intensity;
         dst.normal_y = src.ring;
-        dst.normal_z = timespan;
+        dst.normal_z = timespan * 1e-9f;
         dst.normal_x = src.t / timespan; //        *1e-9f;
       }
       timespan = timespan * 1e-9f;
@@ -609,7 +605,7 @@ public:
             if (largestPickedNum <= 20)
             {
               cloudLabel[ind] = 1;
-              extractedCloud->points[ind].normal_z = 1.0; //   for corner
+              // extractedCloud->points[ind].normal_z = 1.0; //   for corner
               cornerCloud->push_back(extractedCloud->points[ind]);
             }
             else
@@ -669,17 +665,19 @@ public:
         {
           if (cloudLabel[k] <= 0)
           {
-            extractedCloud->points[k].normal_z = 2.0; //   for surf
+            // extractedCloud->points[k].normal_z = 2.0; //   for surf
             surfaceCloudScan->push_back(extractedCloud->points[k]);
           }
         }
       }
 
       surfaceCloudScanDS->clear();
-      downSizeFilter.setInputCloud(surfaceCloudScan);
-      downSizeFilter.filter(*surfaceCloudScanDS);
+      //  降采样会导致normal中存储的数据混乱，进而无法执行
+      // downSizeFilter.setInputCloud(surfaceCloudScan);
+      // downSizeFilter.filter(*surfaceCloudScanDS);
 
-      *surfaceCloud += *surfaceCloudScanDS;
+      // *surfaceCloud += *surfaceCloudScanDS;
+      *surfaceCloud += *surfaceCloudScan;
     }
   }
 

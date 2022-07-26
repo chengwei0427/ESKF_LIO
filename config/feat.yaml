@@ -1,7 +1,9 @@
+common:
   # Topics
-  pointCloudTopic:  "/points_raw" #"/os_cloud_node/points" #"velodyne_points"    "points_raw"     rslidar_points      # Point cloud data
-  # imuTopic: "/os_cloud_node/imu" #"imu_data" #"imu_raw"                         # IMU data
+  pointCloudTopic:  "/velodyne_points" #"/os_cloud_node/points" #"velodyne_points"    "points_raw"     rslidar_points      # Point cloud data
+  imuTopic: "/imu/data" # "/imu_correct" #"/os_cloud_node/imu" #"imu_data" #"imu_raw"      # IMU data
 
+feature_extract:
   # Frames
   lidarFrame: "base_link"
 
@@ -12,7 +14,7 @@
   downsampleRate: 1                           # default: 1. Downsample your data if too many points. i.e., 16 = 64 / 4, 16 = 16 / 1
   lidarMinRange: 1.0                          # default: 1.0, minimum lidar range to be used
   lidarMaxRange: 1000.0                       # default: 1000.0, maximum lidar range to be used
-  feature_enabled: 0                          # default: 1
+  feature_enabled: 1                          # default: 1. use feature or not
   pointFilterRate: 4                          # default:1
 
   # LOAM feature threshold
@@ -23,5 +25,10 @@
 
   # voxel filter paprams
   odometrySurfLeafSize: 0.5                     # default: 0.4 - outdoor, 0.2 - indoor  only use surf ds here
-  # mappingCornerLeafSize: 0.2                    # default: 0.2 - outdoor, 0.1 - indoor
-  # mappingSurfLeafSize: 0.4                      # default: 0.4 - outdoor, 0.2 - indoor
+
+mapping:
+  dense_map_enable: false
+  max_iteration: 10
+  filter_size_surf: 0.5
+  filter_size_map: 0.5
+  cube_side_length: 1000                    # default 1000.
