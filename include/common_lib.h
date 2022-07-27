@@ -61,9 +61,11 @@ struct MeasureGroup // Lidar data and imu dates for the curent process
 {
     MeasureGroup()
     {
+        lidar_beg_time = 0.0;
         this->lidar.reset(new PointCloudXYZI());
     };
     double lidar_beg_time;
+    double lidar_end_time;
     PointCloudXYZI::Ptr lidar;
     std::deque<sensor_msgs::Imu::ConstPtr> imu;
 };
@@ -185,6 +187,40 @@ auto set_pose6d(const double t, const Eigen::Matrix<T, 3, 1> &a, const Eigen::Ma
     }
     // Eigen::Map<Eigen::Matrix3d>(rot_kp.rot, 3,3) = R;
     return std::move(rot_kp);
+}
+
+template <typename T>
+bool esti_plane(Matrix<T, 4, 1> &pca_result, const PointVector &point, const T &threshold)
+{
+    Matrix<T, NUM_MATCH_POINTS, 3> A;
+    Matrix<T, NUM_MATCH_POINTS, 1> b;
+    A.setZero();
+    b.setOnes();
+    b *= -1.0f;
+
+    for (int j = 0; j < NUM_MATCH_POINTS; j++)
+    {
+        A(j, 0) = point[j].x;
+        A(j, 1) = point[j].y;
+        A(j, 2) = point[j].z;
+    }
+
+    Matrix<T, 3, 1> normvec = A.colPivHouseholderQr().solve(b);
+
+    T n = normvec.norm();
+    pca_result(0) = normvec(0) / n;
+    pca_result(1) = normvec(1) / n;
+    pca_result(2) = normvec(2) / n;
+    pca_result(3) = 1.0 / n;
+
+    for (int j = 0; j < NUM_MATCH_POINTS; j++)
+    {
+        if (fabs(pca_result(0) * point[j].x + pca_result(1) * point[j].y + pca_result(2) * point[j].z + pca_result(3)) > threshold)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 #endif

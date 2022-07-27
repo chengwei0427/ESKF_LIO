@@ -26,7 +26,7 @@
 
 /// *************Preconfiguration
 
-#define MAX_INI_COUNT (200)
+#define MAX_INI_COUNT (100)
 
 const bool time_list(PointType &x, PointType &y) { return (x.normal_x < y.normal_x); };
 
@@ -183,11 +183,12 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout
   const double &imu_beg_time = v_imu.front()->header.stamp.toSec();
   const double &imu_end_time = v_imu.back()->header.stamp.toSec();
   const double &pcl_beg_time = meas.lidar_beg_time;
+  const double &pcl_end_time = meas.lidar_end_time;
 
   /*** sort point clouds by offset time ***/
   pcl_out = *(meas.lidar);
   std::sort(pcl_out.points.begin(), pcl_out.points.end(), time_list);
-  const double &pcl_end_time = pcl_beg_time + pcl_out.points.back().normal_z; // normal_z 存储timespan
+
   // std::cout << "[ IMU Process ]: Process lidar from " << pcl_beg_time << " to " << pcl_end_time << ", time: " << pcl_out.points.back().normal_z << ", "
   //           << meas.imu.size() << " imu msgs from " << imu_beg_time << " to " << imu_end_time << ", time:" << imu_end_time - imu_beg_time << std::endl;
 
@@ -207,8 +208,8 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout
     auto &&head = *(it_imu);
     auto &&tail = *(it_imu + 1);
 
-    // if (tail->header.stamp.toSec() < last_lidar_end_time_)
-    //   continue;
+    if (tail->header.stamp.toSec() < last_lidar_end_time_)
+      continue;
 
     angvel_avr << 0.5 * (head->angular_velocity.x + tail->angular_velocity.x),
         0.5 * (head->angular_velocity.y + tail->angular_velocity.y),
@@ -341,7 +342,7 @@ void ImuProcess::Process(const MeasureGroup &meas, StatesGroup &stat, PointCloud
   {
     std::cout << "no imu data" << std::endl;
     return;
-  };
+  }
   ROS_ASSERT(meas.lidar != nullptr);
 
   if (imu_need_init_)

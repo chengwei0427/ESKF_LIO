@@ -3,24 +3,25 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-fig, axs = plt.subplots(5)
+fig, axs = plt.subplots(6)
 lab_pre = ['', 'pre-x', 'pre-y', 'pre-z']
 lab_out = ['', 'out-x', 'out-y', 'out-z']
 plot_ind = range(7,10)
 a_pre=np.loadtxt('Log/mat_pre.txt')
-a_out=np.loadtxt('Log/mat_out.txt')
+# a_out=np.loadtxt('Log/mat_out.txt')
 time=a_pre[:,0]
 axs[0].set_title('Attitude')
 axs[1].set_title('Translation')
 axs[2].set_title('Velocity')
 axs[3].set_title('bg')
 axs[4].set_title('ba')
+axs[5].set_title('gravity')
 for i in range(1,4):
-    for j in range(5):
+    for j in range(6):
         axs[j].plot(time, a_pre[:,i+j*3],'.-', label=lab_pre[i])
-        axs[j].plot(time, a_out[:,i+j*3],'.-', label=lab_out[i])
+        # axs[j].plot(time, a_out[:,i+j*3],'.-', label=lab_out[i])
 
-for i in range(5):
+for i in range(6):
     # axs[i].set_xlim(386,389)
     axs[i].grid()
     axs[i].legend()
@@ -81,6 +82,6 @@ for i in range(5):
 # plt.xticks([1,2,3], ('Outdoor Scene', 'Indoor Scene 1', 'Indoor Scene 2'))
 # # print(time_se)
 # # print(a_out3[:,2])
-plt.grid()
-plt.savefig("Log/time.pdf", dpi=1200)
+# plt.grid()
+# plt.savefig("Log/time.pdf", dpi=1200)
 plt.show()

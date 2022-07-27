@@ -24,8 +24,6 @@ find_package(OpenMP QUIET)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}   ${OpenMP_C_FLAGS}")
 
-find_package(PythonLibs REQUIRED)
-find_path(MATPLOTLIB_CPP_INCLUDE_DIRS "matplotlibcpp.h")
 
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
@@ -52,7 +50,6 @@ include_directories(
 	${catkin_INCLUDE_DIRS} 
   ${EIGEN3_INCLUDE_DIR}
   ${PCL_INCLUDE_DIRS}
-  ${PYTHON_INCLUDE_DIRS}
   include)
 
 add_message_files(
@@ -72,8 +69,7 @@ catkin_package(
   INCLUDE_DIRS
 )
 
-# add_executable(imu_process src/IMU_Processing.cpp)
-# target_link_libraries(imu_process ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
 
 add_executable(loam_feat_extract src/feature_extract.cpp)
 target_link_libraries(loam_feat_extract ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
@@ -81,6 +77,3 @@ target_link_libraries(loam_feat_extract ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${O
 add_executable(loam_laserMapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp)
 add_dependencies(loam_laserMapping ${catkin_EXPORTED_TARGETS})
 target_link_libraries(loam_laserMapping ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${PYTHON_LIBRARIES})
-target_include_directories(loam_laserMapping PRIVATE ${PYTHON_INCLUDE_DIRS})
-# target_compile_definitions(loam_laserMapping PRIVATE ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-
