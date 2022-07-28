@@ -20,7 +20,7 @@ using namespace Eigen;
 
 #define PI_M (3.14159265358)
 #define G_m_s2 (9.8099)    // Gravaty const in GuangDong/China
-#define DIM_OF_STATES (18) // Dimension of states (Let Dim(SO(3)) = 3)
+#define DIM_OF_STATES (24) // Dimension of states (Let Dim(SO(3)) = 3)
 #define DIM_OF_PROC_N (12) // Dimension of process noise (Let Dim(SO(3)) = 3)
 #define CUBE_LEN (6.0)
 #define LIDAR_SP_LEN (2)
@@ -70,12 +70,14 @@ struct MeasureGroup // Lidar data and imu dates for the curent process
     std::deque<sensor_msgs::Imu::ConstPtr> imu;
 };
 
-struct StatesGroup
+struct StatesGroup //  r p R_LI T_LI v bg ba g
 {
     StatesGroup()
     {
         this->rot_end = Eigen::Matrix3d::Identity();
         this->pos_end = Zero3d;
+        this->R_L_I = Eigen::Matrix3d::Identity();
+        this->T_L_I = Zero3d;
         this->vel_end = Zero3d;
         this->bias_g = Zero3d;
         this->bias_a = Zero3d;
@@ -87,6 +89,8 @@ struct StatesGroup
     {
         this->rot_end = b.rot_end;
         this->pos_end = b.pos_end;
+        this->R_L_I = b.R_L_I;
+        this->T_L_I = b.T_L_I;
         this->vel_end = b.vel_end;
         this->bias_g = b.bias_g;
         this->bias_a = b.bias_a;
@@ -98,6 +102,8 @@ struct StatesGroup
     {
         this->rot_end = b.rot_end;
         this->pos_end = b.pos_end;
+        this->R_L_I = b.R_L_I;
+        this->T_L_I = b.T_L_I;
         this->vel_end = b.vel_end;
         this->bias_g = b.bias_g;
         this->bias_a = b.bias_a;
@@ -111,10 +117,12 @@ struct StatesGroup
         StatesGroup a;
         a.rot_end = this->rot_end * Exp(state_add(0, 0), state_add(1, 0), state_add(2, 0));
         a.pos_end = this->pos_end + state_add.block<3, 1>(3, 0);
-        a.vel_end = this->vel_end + state_add.block<3, 1>(6, 0);
-        a.bias_g = this->bias_g + state_add.block<3, 1>(9, 0);
-        a.bias_a = this->bias_a + state_add.block<3, 1>(12, 0);
-        a.gravity = this->gravity + state_add.block<3, 1>(15, 0);
+        a.R_L_I = this->R_L_I * Exp(state_add(6, 0), state_add(7, 0), state_add(8, 0));
+        a.T_L_I = this->T_L_I + state_add.block<3, 1>(9, 0);
+        a.vel_end = this->vel_end + state_add.block<3, 1>(12, 0);
+        a.bias_g = this->bias_g + state_add.block<3, 1>(15, 0);
+        a.bias_a = this->bias_a + state_add.block<3, 1>(18, 0);
+        a.gravity = this->gravity + state_add.block<3, 1>(21, 0);
         a.cov = this->cov;
         return a;
     };
@@ -123,10 +131,12 @@ struct StatesGroup
     {
         this->rot_end = this->rot_end * Exp(state_add(0, 0), state_add(1, 0), state_add(2, 0));
         this->pos_end += state_add.block<3, 1>(3, 0);
-        this->vel_end += state_add.block<3, 1>(6, 0);
-        this->bias_g += state_add.block<3, 1>(9, 0);
-        this->bias_a += state_add.block<3, 1>(12, 0);
-        this->gravity += state_add.block<3, 1>(15, 0);
+        this->R_L_I = this->R_L_I * Exp(state_add(6, 0), state_add(7, 0), state_add(8, 0));
+        this->T_L_I += state_add.block<3, 1>(9, 0);
+        this->vel_end += state_add.block<3, 1>(12, 0);
+        this->bias_g += state_add.block<3, 1>(15, 0);
+        this->bias_a += state_add.block<3, 1>(18, 0);
+        this->gravity += state_add.block<3, 1>(21, 0);
         return *this;
     };
 
@@ -134,17 +144,22 @@ struct StatesGroup
     {
         Eigen::Matrix<double, DIM_OF_STATES, 1> a;
         Eigen::Matrix3d rotd(b.rot_end.transpose() * this->rot_end);
+        Eigen::Matrix3d rotLI(b.R_L_I.transpose() * this->R_L_I);
         a.block<3, 1>(0, 0) = Log(rotd);
         a.block<3, 1>(3, 0) = this->pos_end - b.pos_end;
-        a.block<3, 1>(6, 0) = this->vel_end - b.vel_end;
-        a.block<3, 1>(9, 0) = this->bias_g - b.bias_g;
-        a.block<3, 1>(12, 0) = this->bias_a - b.bias_a;
-        a.block<3, 1>(15, 0) = this->gravity - b.gravity;
+        a.block<3, 1>(6, 0) = Log(rotLI);
+        a.block<3, 1>(9, 0) = this->T_L_I - b.T_L_I;
+        a.block<3, 1>(12, 0) = this->vel_end - b.vel_end;
+        a.block<3, 1>(15, 0) = this->bias_g - b.bias_g;
+        a.block<3, 1>(18, 0) = this->bias_a - b.bias_a;
+        a.block<3, 1>(21, 0) = this->gravity - b.gravity;
         return a;
     };
 
     Eigen::Matrix3d rot_end;                                 // the estimated attitude (rotation matrix) at the end lidar point
     Eigen::Vector3d pos_end;                                 // the estimated position at the end lidar point (world frame)
+    Eigen::Matrix3d R_L_I;                                   //
+    Eigen::Vector3d T_L_I;                                   //
     Eigen::Vector3d vel_end;                                 // the estimated velocity at the end lidar point (world frame)
     Eigen::Vector3d bias_g;                                  // gyroscope bias
     Eigen::Vector3d bias_a;                                  // accelerator bias

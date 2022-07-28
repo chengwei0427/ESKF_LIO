@@ -19,6 +19,7 @@ Panels:
         - /Features1/PointCloud21
         - /Features1/PointCloud22
         - /Features1/PointCloud23
+        - /Axes2
         - /Odometry2/Shape1
       Splitter Ratio: 0.520588219165802
     Tree Height: 817
@@ -68,9 +69,9 @@ Visualization Manager:
       Value: false
     - Class: rviz/Axes
       Enabled: true
-      Length: 0.699999988079071
+      Length: 3
       Name: Axes
-      Radius: 0.05999999865889549
+      Radius: 0.05000000074505806
       Reference Frame: <Fixed Frame>
       Value: true
     - Class: rviz/Group
@@ -502,9 +503,9 @@ Visualization Manager:
       Name: Features
     - Class: rviz/Axes
       Enabled: true
-      Length: 0.699999988079071
+      Length: 1
       Name: Axes
-      Radius: 0.05999999865889549
+      Radius: 0.30000001192092896
       Reference Frame: aft_mapped
       Value: true
     - Angle Tolerance: 0.10000000149011612
@@ -604,25 +605,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 83.37019348144531
+      Distance: 47.908084869384766
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 3.6038637161254883
-        Y: -1.7663813829421997
-        Z: 4.197209358215332
+        X: 0.09649354219436646
+        Y: 3.086299180984497
+        Z: 1.759817123413086
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5497963428497314
+      Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 3.16853928565979
+      Yaw: 6.266721725463867
     Saved: ~
 Window Geometry:
   Displays:

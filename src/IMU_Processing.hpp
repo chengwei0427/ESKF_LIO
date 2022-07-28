@@ -41,6 +41,10 @@ public:
 
   void Process(const MeasureGroup &meas, StatesGroup &state, PointCloudXYZI::Ptr pcl_un_);
   void Reset();
+  void set_extrinsic(const V3D &transl, const M3D &rot);
+  void set_extrinsic(const V3D &transl);
+  void set_extrinsic(const MD(4, 4) & T);
+
   void IMU_Initial(const MeasureGroup &meas, StatesGroup &state, int &N);
 
   // Eigen::Matrix3d Exp(const Eigen::Vector3d &ang_vel, const double &dt);
@@ -64,8 +68,6 @@ public:
   Eigen::Vector3d cov_acc;
   Eigen::Vector3d cov_gyr;
 
-  std::ofstream fout;
-
 private:
   /*** Whether is the first frame, init for first frame ***/
   bool b_first_frame_ = true;
@@ -74,6 +76,8 @@ private:
   int init_iter_num = 1;
   Eigen::Vector3d mean_acc;
   Eigen::Vector3d mean_gyr;
+  M3D Lidar_R_wrt_IMU;
+  V3D Lidar_T_wrt_IMU;
 
   /*** Undistorted pointcloud ***/
   PointCloudXYZI::Ptr cur_pcl_un_;
@@ -102,12 +106,13 @@ ImuProcess::ImuProcess()
   mean_acc = Eigen::Vector3d(0, 0, -1.0);
   mean_gyr = Eigen::Vector3d(0, 0, 0);
   angvel_last = Zero3d;
+  Lidar_T_wrt_IMU = Zero3d;
+  Lidar_R_wrt_IMU = Eye3d;
   cov_proc_noise = Eigen::Matrix<double, DIM_OF_PROC_N, 1>::Zero();
-  // Lidar_offset_to_IMU = Eigen::Vector3d(0.0, 0.0, -0.0);
-  // fout.open(DEBUG_FILE_DIR("imu.txt"),std::ios::out);
+  last_imu_.reset(new sensor_msgs::Imu());
 }
 
-ImuProcess::~ImuProcess() { fout.close(); }
+ImuProcess::~ImuProcess() {}
 
 void ImuProcess::Reset()
 {
@@ -133,7 +138,24 @@ void ImuProcess::Reset()
   IMUpose.clear();
 
   cur_pcl_un_.reset(new PointCloudXYZI());
-  fout.close();
+}
+
+void ImuProcess::set_extrinsic(const MD(4, 4) & T)
+{
+  Lidar_T_wrt_IMU = T.block<3, 1>(0, 3);
+  Lidar_R_wrt_IMU = T.block<3, 3>(0, 0);
+}
+
+void ImuProcess::set_extrinsic(const V3D &transl)
+{
+  Lidar_T_wrt_IMU = transl;
+  Lidar_R_wrt_IMU.setIdentity();
+}
+
+void ImuProcess::set_extrinsic(const V3D &transl, const M3D &rot)
+{
+  Lidar_T_wrt_IMU = transl;
+  Lidar_R_wrt_IMU = rot;
 }
 
 void ImuProcess::IMU_Initial(const MeasureGroup &meas, StatesGroup &state_inout, int &N)
@@ -173,6 +195,8 @@ void ImuProcess::IMU_Initial(const MeasureGroup &meas, StatesGroup &state_inout,
   state_inout.gravity = -mean_acc / mean_acc.norm() * G_m_s2;
   state_inout.rot_end = Eye3d; // Exp(mean_acc.cross(Eigen::Vector3d(0, 0, -1 / scale_gravity)));
   state_inout.bias_g = mean_gyr;
+  state_inout.R_L_I = Lidar_R_wrt_IMU;
+  state_inout.T_L_I = Lidar_T_wrt_IMU;
 }
 
 void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout, PointCloudXYZI &pcl_out)
@@ -242,21 +266,22 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout
     acc_avr_skew << SKEW_SYM_MATRX(acc_avr);
 
     F_x.block<3, 3>(0, 0) = Exp(angvel_avr, -dt);
-    F_x.block<3, 3>(0, 9) = -Eye3d * dt;
+    F_x.block<3, 3>(0, 15) = -Eye3d * dt;
     // F_x.block<3,3>(3,0)  = R_imu * off_vel_skew * dt;
-    F_x.block<3, 3>(3, 6) = Eye3d * dt;
-    F_x.block<3, 3>(6, 0) = -R_imu * acc_avr_skew * dt;
-    F_x.block<3, 3>(6, 12) = -R_imu * dt;
-    F_x.block<3, 3>(6, 15) = Eye3d * dt;
+    F_x.block<3, 3>(3, 12) = Eye3d * dt;
+    F_x.block<3, 3>(12, 0) = -R_imu * acc_avr_skew * dt;
+    F_x.block<3, 3>(12, 18) = -R_imu * dt;
+    F_x.block<3, 3>(12, 21) = Eye3d * dt;
 
     Eigen::Matrix3d cov_acc_diag(Eye3d), cov_gyr_diag(Eye3d);
     cov_acc_diag.diagonal() = cov_acc;
     cov_gyr_diag.diagonal() = cov_gyr;
     cov_w.block<3, 3>(0, 0).diagonal() = cov_gyr * dt * dt * 10000;
     cov_w.block<3, 3>(3, 3) = R_imu * cov_gyr_diag * R_imu.transpose() * dt * dt * 10000;
-    cov_w.block<3, 3>(6, 6) = R_imu * cov_acc_diag * R_imu.transpose() * dt * dt * 10000;
-    cov_w.block<3, 3>(9, 9).diagonal() = Eigen::Vector3d(0.0001, 0.0001, 0.0001) * dt * dt;   // bias gyro covariance
-    cov_w.block<3, 3>(12, 12).diagonal() = Eigen::Vector3d(0.0001, 0.0001, 0.0001) * dt * dt; // bias acc covariance
+    //  TODO: extrinsic noise ???
+    cov_w.block<3, 3>(12, 12) = R_imu * cov_acc_diag * R_imu.transpose() * dt * dt * 10000;
+    cov_w.block<3, 3>(15, 15).diagonal() = Eigen::Vector3d(0.0001, 0.0001, 0.0001) * dt * dt; // bias gyro covariance
+    cov_w.block<3, 3>(18, 18).diagonal() = Eigen::Vector3d(0.0001, 0.0001, 0.0001) * dt * dt; // bias acc covariance
 
     state_inout.cov = F_x * state_inout.cov * F_x.transpose() + cov_w; //  ESKF 预测值和真值的协方差 --- [2]
 
@@ -286,12 +311,11 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout
   state_inout.rot_end = R_imu * Exp(angvel_avr, dt);
   state_inout.pos_end = pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt; //  ESKF 预测值  --- [1]
 
-  auto pos_liD_e = state_inout.pos_end + state_inout.rot_end * Lidar_offset_to_IMU;
-  // auto R_liD_e   = state_inout.rot_end * Lidar_R_to_IMU;
-
   last_lidar_end_time_ = pcl_end_time;
 
-  std::cout << "[ IMU Process ]: vel " << state_inout.vel_end.transpose() << " pos " << state_inout.pos_end.transpose() << " ba" << state_inout.bias_a.transpose() << " bg " << state_inout.bias_g.transpose() << std::endl;
+  std::cout << "[ IMU Process ]: vel " << state_inout.vel_end.transpose() << " pos "
+            << state_inout.pos_end.transpose() << " ba" << state_inout.bias_a.transpose()
+            << " bg " << state_inout.bias_g.transpose() << std::endl;
   std::cout << "propagated cov: " << state_inout.cov.diagonal().transpose() << std::endl;
 
   /*** undistort each lidar point (backward propagation) ***/
@@ -317,10 +341,12 @@ void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout
        * So if we want to compensate a point at timestamp-i to the frame-e
        * P_compensate = R_imu_e ^ T * (R_i * P_i + T_ei) where T_ei is represented in global frame */
       Eigen::Matrix3d R_i(R_imu * Exp(angvel_avr, dt));
-      Eigen::Vector3d T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt + R_i * Lidar_offset_to_IMU - pos_liD_e);
+      Eigen::Vector3d T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - state_inout.pos_end);
 
       Eigen::Vector3d P_i(it_pcl->x, it_pcl->y, it_pcl->z);
-      Eigen::Vector3d P_compensate = state_inout.rot_end.transpose() * (R_i * P_i + T_ei);
+      // Eigen::Vector3d P_compensate = state_inout.rot_end.transpose() * (R_i * P_i + T_ei);
+
+      Eigen::Vector3d P_compensate = state_inout.R_L_I.transpose() * (state_inout.rot_end.transpose() * (R_i * (state_inout.R_L_I * P_i + state_inout.T_L_I) + T_ei) - state_inout.T_L_I);
 
       /// save Undistorted points and their rotation
       it_pcl->x = P_compensate(0);

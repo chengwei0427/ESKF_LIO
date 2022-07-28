@@ -256,7 +256,7 @@ public:
       pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
       inputCloud->points.resize(laserCloudIn->size());
       inputCloud->is_dense = laserCloudIn->is_dense;
-#ifdef TEST_LIO_SAM_6AXIS_DATA
+#ifndef TEST_LIO_SAM_6AXIS_DATA
       timespan = laserCloudIn->points.back().time;
 #else
       timespan = laserCloudIn->points.back().time - laserCloudIn->points[0].time;
@@ -271,13 +271,13 @@ public:
         dst.intensity = src.intensity;
         dst.normal_y = src.ring; //  ring
         dst.normal_z = timespan;
-#ifdef TEST_LIO_SAM_6AXIS_DATA
+#ifndef TEST_LIO_SAM_6AXIS_DATA
         dst.normal_x = src.time / timespan;
 #else
         dst.normal_x = (src.time + timespan) / timespan;
 #endif
       }
-#ifndef TEST_LIO_SAM_6AXIS_DATA
+#ifdef TEST_LIO_SAM_6AXIS_DATA
       timespan = 0.0;
 #endif
       // std::cout << "stamp: " << laserCloudIn->points[0].time << "," << laserCloudIn->points[100].time

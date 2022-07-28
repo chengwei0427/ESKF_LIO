@@ -1,12 +1,31 @@
-**Noted: Ubuntu 16.04 and lower is not supported**
-## FAST-LIO 2.0
-Will Launch **Soon**.
+<a href="#"><img src="https://img.shields.io/badge/c++-%2300599C.svg?style=flat&logo=c%2B%2B&logoColor=white"></img></a>
 
-New features:
-1. Faster and Better;
-2. Higher Frequency;
-3. More LiDAR support (Horizon and Ouster 64);
-4. Support ARM based embeded platforms.
+## iESKF-lio
+
+This repository is a modified LiDAR-inertial odometry system. The system is developed based on the open-source odometry framework [**FAST-LIO**](https://github.com/XW-HKU/fast_lio) to get the odometry information. And the feature extract moudle is implemented based on [**LIO-SAM**](https://github.com/TixiaoShan/LIO-SAM) .
+
+## Modification
+
+  - Feature extract moudle is implemented based on lio-sam, this moudle support **multiple lidar types**(such as velodyne,ouster,robosense, livox etc.);
+  - laser mapping moudle is implemented base on **fast-lio 1.0**, the original moudle only support livox lidar;
+  - use **ikdtree** manage the map;
+  - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
+
+##  DEMO
+<p align='center'>
+    <img src="./doc/calib_test.png" alt="drawing" width="1000"/>
+</p>
+
+[Demo video](https://www.bilibili.com/video/BV1NG411h7wE?spm_id_from=333.999.0.0&vd_source=438f630fe29bd5049b24c7f05b1bcaa3)
+
+
+## TODO
+
+  - [ ] add ivox 
+  - [ ] add extrinsic parameter calibration
+  - [ ] compare with FAST-LIO2
+
+**-----------------------------------------------------------------------  divide line  ------------------------------------------------------------------------**
 
 ## FAST-LIO
 **FAST-LIO** (Fast LiDAR-Inertial Odometry) is a computationally efficient and robust LiDAR-inertial odometry package. It fuses LiDAR feature points with IMU data using a tightly-coupled iterated extended Kalman filter to allow robust navigation in fast-motion, noisy or cluttered environments where degeneration occurs. Our package address many key issues:

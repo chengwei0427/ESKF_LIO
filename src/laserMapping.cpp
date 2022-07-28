@@ -110,7 +110,7 @@ PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI());
 PointCloudXYZI::Ptr coeffSel(new PointCloudXYZI());
 pcl::VoxelGrid<PointType> downSizeFilterSurf;
 
-bool dense_map_en, flg_EKF_inited = 0, flg_EKF_converged = 0;
+bool dense_map_en, flg_EKF_inited = false, flg_EKF_converged = false, extrinsic_est_en = true;
 // all points
 PointCloudXYZI::Ptr laserCloudFullRes2(new PointCloudXYZI());
 
@@ -120,6 +120,12 @@ KD_TREE<PointType> ikdtree;
 
 Eigen::Vector3f XAxisPoint_body(LIDAR_SP_LEN, 0.0, 0.0);
 Eigen::Vector3f XAxisPoint_world(LIDAR_SP_LEN, 0.0, 0.0);
+
+std::vector<double> extrinT(3, 0.0);
+std::vector<double> extrinR(9, 0.0);
+V3D Lidar_T_wrt_IMU(Zero3d);
+M3D Lidar_R_wrt_IMU(Eye3d);
+V3D pos_lid;
 
 // estimator inputs and output;
 MeasureGroup Measures;
@@ -136,7 +142,7 @@ void SigHandle(int sig)
 void pointBodyToWorld(PointType const *const pi, PointType *const po)
 {
     Eigen::Vector3d p_body(pi->x, pi->y, pi->z);
-    Eigen::Vector3d p_global(state.rot_end * (p_body + Lidar_offset_to_IMU) + state.pos_end);
+    Eigen::Vector3d p_global(state.rot_end * (state.R_L_I * p_body + state.T_L_I) + state.pos_end);
 
     po->x = p_global(0);
     po->y = p_global(1);
@@ -148,7 +154,7 @@ template <typename T>
 void pointBodyToWorld(const Eigen::Matrix<T, 3, 1> &pi, Eigen::Matrix<T, 3, 1> &po)
 {
     Eigen::Vector3d p_body(pi[0], pi[1], pi[2]);
-    Eigen::Vector3d p_global(state.rot_end * (p_body + Lidar_offset_to_IMU) + state.pos_end);
+    Eigen::Vector3d p_global(state.rot_end * (state.R_L_I * p_body + state.T_L_I) + state.pos_end);
     po[0] = p_global(0);
     po[1] = p_global(1);
     po[2] = p_global(2);
@@ -157,7 +163,7 @@ void pointBodyToWorld(const Eigen::Matrix<T, 3, 1> &pi, Eigen::Matrix<T, 3, 1> &
 void RGBpointBodyToWorld(PointType const *const pi, pcl::PointXYZI *const po)
 {
     Eigen::Vector3d p_body(pi->x, pi->y, pi->z);
-    Eigen::Vector3d p_global(state.rot_end * (p_body + Lidar_offset_to_IMU) + state.pos_end);
+    Eigen::Vector3d p_global(state.rot_end * (state.R_L_I * p_body + state.T_L_I) + state.pos_end);
 
     po->x = p_global(0);
     po->y = p_global(1);
@@ -193,7 +199,7 @@ void lasermap_fov_segment()
     kdtree_delete_time = 0.0;
     pointBodyToWorld(XAxisPoint_body, XAxisPoint_world);
 
-    V3D pos_LiD = state.pos_end;
+    V3D pos_LiD = pos_lid;
     if (!Localmap_Initialized)
     {
         for (int i = 0; i < 3; i++)
@@ -392,6 +398,16 @@ int main(int argc, char **argv)
     nh.param<double>("mapping/filter_size_surf", filter_size_surf_min, 0.5);
     nh.param<double>("mapping/filter_size_map", filter_size_map_min, 0.5);
     nh.param<double>("mapping/cube_side_length", cube_len, 1000);
+    nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
+    nh.param<vector<double>>("mapping/extrinsic_T", extrinT, std::vector<double>());
+    nh.param<vector<double>>("mapping/extrinsic_R", extrinR, std::vector<double>());
+
+    Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
+    Lidar_R_wrt_IMU << MAT_FROM_ARRAY(extrinR);
+
+    std::cout << "R: \n"
+              << Lidar_R_wrt_IMU << std::endl;
+    std::cout << "T: " << Lidar_T_wrt_IMU.transpose() << std::endl;
 
     ROS_INFO("\033[1;32m----> ESKF_LIO mapping Started.\033[0m");
 
@@ -418,14 +434,10 @@ int main(int argc, char **argv)
 
     nav_msgs::Odometry odomAftMapped;
 
-    cv::Mat matA1(3, 3, CV_32F, cv::Scalar::all(0));
-    cv::Mat matD1(1, 3, CV_32F, cv::Scalar::all(0));
-    cv::Mat matV1(3, 3, CV_32F, cv::Scalar::all(0));
-    cv::Mat matP(6, 6, CV_32F, cv::Scalar::all(0));
-
     downSizeFilterSurf.setLeafSize(filter_size_surf_min, filter_size_surf_min, filter_size_surf_min);
 
     std::shared_ptr<ImuProcess> p_imu(new ImuProcess());
+    p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
 
     /*** debug record ***/
     std::ofstream fout_pre, fout_out;
@@ -461,7 +473,8 @@ int main(int argc, char **argv)
             }
 
             p_imu->Process(Measures, state, feats_undistort);
-            StatesGroup state_propagat(state);
+            StatesGroup state_propagat(state); //  predict pose
+            pos_lid = state_propagat.pos_end + state_propagat.rot_end * state_propagat.T_L_I;
 
             if (feats_undistort->empty() || (feats_undistort == NULL))
             {
@@ -473,15 +486,11 @@ int main(int argc, char **argv)
             flg_EKF_inited = (Measures.lidar_beg_time - first_lidar_time) < INIT_TIME ? false : true;
 
             /*** Compute the euler angle ***/
-            Eigen::Vector3d euler_cur = RotMtoEuler(state.rot_end);
-            fout_pre << std::setw(10) << Measures.lidar_beg_time - first_lidar_time << " "
-                     << euler_cur.transpose() * 57.3 << " " << state.pos_end.transpose()
-                     << " " << state.vel_end.transpose() << " " << state.bias_g.transpose()
-                     << " " << state.bias_a.transpose() << " " << state.gravity.transpose() << std::endl;
+            V3D euler_cur = RotMtoEuler(state.rot_end);
 
-            std::cout << "pre-integrated states: " << euler_cur.transpose() * 57.3 << " "
-                      << state.pos_end.transpose() << " " << state.vel_end.transpose() << " "
-                      << state.bias_g.transpose() << " " << state.bias_a.transpose() << std::endl;
+            std::cout << "pre-integrated states, r:" << euler_cur.transpose() * 57.3 << " ,p:"
+                      << state.pos_end.transpose() << " ,v:" << state.vel_end.transpose() << " ,bg:"
+                      << state.bias_g.transpose() << " ,ba:" << state.bias_a.transpose() << std::endl;
 
             /*** Segment the map in lidar FOV ***/
             lasermap_fov_segment();
@@ -543,18 +552,24 @@ int main(int argc, char **argv)
                     // #pragma omp parallel for
                     for (int i = 0; i < feats_down_size; i++)
                     {
-                        PointType &pointOri_tmpt = feats_down->points[i];
+                        PointType &point_body = feats_down->points[i];
                         PointType &point_world = feats_down_updated->points[i];
 
                         /* transform to world frame */
-                        pointBodyToWorld(&pointOri_tmpt, &point_world);
+                        V3D p_body(point_body.x, point_body.y, point_body.z);
+                        V3D p_global(state.rot_end * (state.R_L_I * p_body + state.T_L_I) + state.pos_end);
+                        // pointBodyToWorld(&point_body, &point_world);
+                        point_world.x = p_global(0);
+                        point_world.y = p_global(1);
+                        point_world.z = p_global(2);
+                        point_world.intensity = point_body.intensity;
+
                         std::vector<float> pointSearchSqDis(NUM_MATCH_POINTS);
 
                         auto &points_near = Nearest_Points[i];
 
                         if (iterCount == 0 || rematch_en)
                         {
-                            point_selected_surf[i] = true;
                             /** Find the closest surfaces in the map **/
                             ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
 
@@ -574,7 +589,7 @@ int main(int argc, char **argv)
                             // loss fuction
                             float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y + pabcd(2) * point_world.z + pabcd(3); // 公式12）    点到面的距离
                             // if(fabs(pd2) > 0.1) continue;
-                            float s = 1 - 0.9 * fabs(pd2) / sqrt(sqrt(point_world.x * point_world.x + point_world.y * point_world.y + point_world.z * point_world.z));
+                            float s = 1 - 0.9 * fabs(pd2) / sqrt(p_body.norm());
 
                             if ((s > 0.9))
                             {
@@ -614,7 +629,7 @@ int main(int argc, char **argv)
                               << " res_mean_last " << res_mean_last << ANSI_COLOR_RESET << std::endl;
 
                     /*** Computation of Measuremnt Jacobian matrix H and measurents vector ***/
-                    Eigen::MatrixXd Hsub(effct_feat_num, 6);
+                    Eigen::MatrixXd Hsub(effct_feat_num, 12);
                     Eigen::VectorXd meas_vec(effct_feat_num);
                     Hsub.setZero();
 
@@ -623,9 +638,11 @@ int main(int argc, char **argv)
                     for (int i = 0; i < effct_feat_num; i++)
                     {
                         const PointType &laser_p = laserCloudOri->points[i];
-                        Eigen::Vector3d point_this(laser_p.x, laser_p.y, laser_p.z);
-                        point_this += Lidar_offset_to_IMU;
-                        Eigen::Matrix3d point_crossmat;
+                        V3D point_this_be(laser_p.x, laser_p.y, laser_p.z);
+                        M3D point_be_crossmat;
+                        point_be_crossmat << SKEW_SYM_MATRX(point_this_be);
+                        V3D point_this = state.R_L_I * point_this_be + state.T_L_I;
+                        M3D point_crossmat;
                         point_crossmat << SKEW_SYM_MATRX(point_this);
 
                         /*** get the normal vector of closest surface/corner ***/
@@ -636,14 +653,21 @@ int main(int argc, char **argv)
                         //  FIXME:
                         //  注意，这里A是列向量，而论文推导种Hj是行向量，故这里从列向量到行向量，做了一次转置 ref:https://github.com/hku-mars/FAST_LIO/issues/62
                         //  而在进行转置处理后，就不会有负号了 ref:https://github.com/hku-mars/FAST_LIO/issues/28
-                        Eigen::Vector3d A(point_crossmat * state.rot_end.transpose() * norm_vec);
-                        Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z;
+                        V3D C(state.rot_end.transpose() * norm_vec);
+                        V3D A(point_crossmat * C);
+                        if (extrinsic_est_en)
+                        {
+                            V3D B(point_be_crossmat * state.R_L_I.transpose() * C);
+                            Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z, VEC_FROM_ARRAY(B), VEC_FROM_ARRAY(C);
+                        }
+                        else
+                            Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z;
 
                         /*** Measuremnt: distance to the closest surface/corner ***/
                         meas_vec(i) = -norm_p.intensity;
                     }
 
-                    Eigen::Vector3d rot_add, t_add, v_add, bg_add, ba_add, g_add;
+                    Eigen::Vector3d rot_add, t_add;
                     Eigen::Matrix<double, DIM_OF_STATES, 1> solution;
                     Eigen::MatrixXd K(DIM_OF_STATES, effct_feat_num);
 
@@ -651,29 +675,33 @@ int main(int argc, char **argv)
                     if (!flg_EKF_inited)
                     {
                         /*** only run in initialization period ***/
-                        Eigen::MatrixXd H_init(Eigen::Matrix<double, 9, DIM_OF_STATES>::Zero());
-                        Eigen::MatrixXd z_init(Eigen::Matrix<double, 9, 1>::Zero());
+                        Eigen::MatrixXd H_init(Eigen::Matrix<double, 15, DIM_OF_STATES>::Zero());
+                        Eigen::MatrixXd z_init(Eigen::Matrix<double, 15, 1>::Zero());
                         H_init.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
                         H_init.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity();
-                        H_init.block<3, 3>(6, 15) = Eigen::Matrix3d::Identity();
+                        H_init.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity();
+                        H_init.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity();
+                        H_init.block<3, 3>(12, 21) = Eigen::Matrix3d::Identity();
                         z_init.block<3, 1>(0, 0) = -Log(state.rot_end);
-                        z_init.block<3, 1>(0, 0) = -state.pos_end;
+                        z_init.block<3, 1>(3, 0) = -state.pos_end;
+                        z_init.block<3, 1>(6, 0) = -Log(state.R_L_I);
+                        z_init.block<3, 1>(9, 0) = -state.T_L_I;
 
                         auto H_init_T = H_init.transpose();
-                        auto &&K_init = state.cov * H_init_T * (H_init * state.cov * H_init_T + 0.0001 * Eigen::Matrix<double, 9, 9>::Identity()).inverse(); //  公式20）
+                        auto &&K_init = state.cov * H_init_T * (H_init * state.cov * H_init_T + 0.0001 * Eigen::Matrix<double, 12, 12>::Identity()).inverse(); //  公式20）
                         solution = K_init * z_init;
 
-                        solution.block<9, 1>(0, 0).setZero();
+                        solution.block<12, 1>(0, 0).setZero();
                         state += solution;
                         state.cov = (Eigen::MatrixXd::Identity(DIM_OF_STATES, DIM_OF_STATES) - K_init * H_init) * state.cov; //  公式19）
                     }
                     else
                     {
                         auto &&Hsub_T = Hsub.transpose();
-                        H_T_H.block<6, 6>(0, 0) = Hsub_T * Hsub;
+                        H_T_H.block<12, 12>(0, 0) = Hsub_T * Hsub;
                         Eigen::Matrix<double, DIM_OF_STATES, DIM_OF_STATES> &&K_1 =
                             (H_T_H + (state.cov / LASER_POINT_COV).inverse()).inverse(); //  由于laser point互相独立，R是对角矩阵，即这里的 LASER_POINT_COV
-                        K = K_1.block<DIM_OF_STATES, 6>(0, 0) * Hsub_T;                  //  公式20）  ESKF 卡尔曼增益  ---  [3]
+                        K = K_1.block<DIM_OF_STATES, 12>(0, 0) * Hsub_T;                 //  公式20）  ESKF 卡尔曼增益  ---  [3]
 
                         // solution = K * meas_vec;
                         // state += solution;
@@ -682,7 +710,7 @@ int main(int argc, char **argv)
                         // solution = K * (meas_vec - Hsub * vec.block<6,1>(0,0));
                         // state = state_propagat + solution;
 
-                        solution = K * meas_vec + vec - K * Hsub * vec.block<6, 1>(0, 0);
+                        solution = K * meas_vec + vec - K * Hsub * vec.block<12, 1>(0, 0);
                         state += solution; //   公式18）  ESKF 更新估计值 --- [4]
 
                         rot_add = solution.block<3, 1>(0, 0);
@@ -697,6 +725,8 @@ int main(int argc, char **argv)
 
                         deltaR = rot_add.norm() * 57.3;
                         deltaT = t_add.norm() * 100;
+
+                        state_propagat = state;
                     }
 
                     euler_cur = RotMtoEuler(state.rot_end);
@@ -719,19 +749,28 @@ int main(int argc, char **argv)
                         if (flg_EKF_inited)
                         {
                             /*** Covariance Update ***/
-                            G.block<DIM_OF_STATES, 6>(0, 0) = K * Hsub;
+                            G.block<DIM_OF_STATES, 12>(0, 0) = K * Hsub;
                             state.cov = (I_STATE - G) * state.cov; //   公式19）  ESKF  估计值和真值的后验协方差   -----  [5]
                             total_distance += (state.pos_end - position_last).norm();
                             position_last = state.pos_end;
 
-                            std::cout << "position: " << state.pos_end.transpose() << " total distance: " << total_distance << std::endl;
+                            std::cout << ANSI_COLOR_YELLOW << "position: " << state.pos_end.transpose() << " total distance: " << total_distance
+                                      << ", extT: " << state.T_L_I.transpose() << ", extR: " << state.R_L_I << ANSI_COLOR_RESET << std::endl;
                         }
 
                         break;
                     }
                 }
 
-                std::cout << ANSI_COLOR_GREEN << "[ mapping ]: iteration count: " << iterCount + 1 << ANSI_COLOR_RESET << std::endl;
+                V3D ext_euler = RotMtoEuler(state.R_L_I);
+                fout_pre << std::setw(10) << Measures.lidar_beg_time - first_lidar_time << " "
+                         << euler_cur.transpose() << " " << state.pos_end.transpose()
+                         << " " << ext_euler.transpose() << " " << state.T_L_I.transpose()
+                         << " " << state.vel_end.transpose() << " " << state.bias_g.transpose()
+                         << " " << state.bias_a.transpose() << " " << state.gravity.transpose()
+                         << " " << feats_undistort->points.size() << std::endl;
+
+                std::cout << ANSI_COLOR_GREEN_BOLD << "[ mapping ]: iteration count: " << iterCount + 1 << ANSI_COLOR_RESET << std::endl;
 
                 /*** add new frame points to map ikdtree ***/
 
