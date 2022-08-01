@@ -158,8 +158,8 @@ struct StatesGroup //  r p R_LI T_LI v bg ba g
 
     Eigen::Matrix3d rot_end;                                 // the estimated attitude (rotation matrix) at the end lidar point
     Eigen::Vector3d pos_end;                                 // the estimated position at the end lidar point (world frame)
-    Eigen::Matrix3d R_L_I;                                   //
-    Eigen::Vector3d T_L_I;                                   //
+    Eigen::Matrix3d R_L_I;                                   // Rotation from Lidar frame L to IMU frame I
+    Eigen::Vector3d T_L_I;                                   // Translation from Lidar frame L to IMU frame I
     Eigen::Vector3d vel_end;                                 // the estimated velocity at the end lidar point (world frame)
     Eigen::Vector3d bias_g;                                  // gyroscope bias
     Eigen::Vector3d bias_a;                                  // accelerator bias

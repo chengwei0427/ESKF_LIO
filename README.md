@@ -10,6 +10,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
   - laser mapping moudle is implemented base on **fast-lio 1.0**, the original moudle only support livox lidar;
   - use **ikdtree** manage the map;
   - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
+  - add online extrinsic calib as fast-lio2
 
 ##  DEMO
 <p align='center'>
@@ -22,7 +23,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
 ## TODO
 
   - [ ] add ivox 
-  - [ ] add extrinsic parameter calibration
+  - [x] add extrinsic parameter calibration
   - [ ] compare with FAST-LIO2
 
 **-----------------------------------------------------------------------  divide line  ------------------------------------------------------------------------**
