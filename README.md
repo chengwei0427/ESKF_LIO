@@ -1,4 +1,9 @@
 <a href="#"><img src="https://img.shields.io/badge/c++-%2300599C.svg?style=flat&logo=c%2B%2B&logoColor=white"></img></a>
+  <a href="#"><img src="https://img.shields.io/github/stars/chengwei0427/ESKF_LIO"></img></a>
+  <a href="#"><img src="https://img.shields.io/github/forks/chengwei0427/ESKF_LIO"></img></a>
+  <a href="#"><img src="https://img.shields.io/github/repo-size/chengwei0427/ESKF_LIO"></img></a>
+  <a href="https://github.com/chengwei0427/ESKF_LIO/issues"><img src="https://img.shields.io/github/issues/chengwei0427/ESKF_LIO"></img></a>
+  <a href="https://github.com/chengwei0427/ESKF_LIO/graphs/contributors"><img src="https://img.shields.io/github/contributors/chengwei0427/ESKF_LIO?color=blue"></img></a>
 
 ## iESKF-lio
 
@@ -7,7 +12,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
 ## Modification
 
   - Feature extract moudle is implemented based on lio-sam, this moudle support **multiple lidar types**(such as velodyne,ouster,robosense, livox etc.);
-  - laser mapping moudle is implemented base on **fast-lio 1.0**, the original moudle only support livox lidar;
+  - laser mapping moudle is implemented base on **fast-lio 1.0**, Use Eigen matrix instead of **IKFom**;
   - use **ikdtree** manage the map;
   - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
   - add online extrinsic calib as fast-lio2
@@ -19,12 +24,18 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
 
 [Demo video](https://www.bilibili.com/video/BV1NG411h7wE?spm_id_from=333.999.0.0&vd_source=438f630fe29bd5049b24c7f05b1bcaa3)
 
+<p align='center'>
+    <img src="./doc/test.png" alt="drawing" width="1000"/>
+</p>
+[Demo video](https://www.bilibili.com/video/BV1FG4y1v7co/?vd_source=438f630fe29bd5049b24c7f05b1bcaa3)
+
 
 ## TODO
 
   - [ ] add ivox 
   - [x] add extrinsic parameter calibration
   - [ ] compare with FAST-LIO2
+  - [x] add test video
 
 **-----------------------------------------------------------------------  divide line  ------------------------------------------------------------------------**
 

@@ -132,7 +132,8 @@ public:
     }
     else if (sensorStr == "livox")
     {
-      sensor == SensorType::LIVOX;
+      sensor = SensorType::LIVOX;
+      std::cout << "sensor type: livox-" << int(sensor) << std::endl;
     }
     else if (sensorStr == "ouster")
     {
@@ -148,6 +149,7 @@ public:
           "Invalid sensor type (must be either 'velodyne' 'ouster' 'robosense' or 'livox'): " << sensorStr);
       ros::shutdown();
     }
+
     nh.param<int>("feature_extract/N_SCAN", N_SCAN, 16);
     nh.param<int>("feature_extract/Horizon_SCAN", Horizon_SCAN, 1800);
     nh.param<int>("feature_extract/downsampleRate", downsampleRate, 1);
@@ -251,6 +253,7 @@ public:
   {
     sensor_msgs::PointCloud2 currentCloudMsg = *laserCloudMsg;
     double timespan;
+
     if (sensor == SensorType::VELODYNE)
     {
       pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
