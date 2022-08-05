@@ -726,7 +726,7 @@ int main(int argc, char **argv)
                         deltaR = rot_add.norm() * 57.3;
                         deltaT = t_add.norm() * 100;
 
-                        state_propagat = state;
+                        // state_propagat = state;
                     }
 
                     euler_cur = RotMtoEuler(state.rot_end);
