@@ -16,7 +16,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
   - use **ikdtree** manage the map;
   - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
   - add online extrinsic calib as fast-lio2
-  - add new lidar process moudle, this moudle support **process multi-lidar (as one Lidar)**(will upload soon);
+  - add new lidar process moudle, this moudle support **process multi-lidar (as one Lidar)**;
 
 ##  DEMO
 **[update 2022-08-05]**
@@ -40,8 +40,32 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
 <p align='center'>
     <img src="./doc/test.png" alt="drawing" width="1000"/>
 </p>
+
 [hkust_20201105full test video](https://www.bilibili.com/video/BV1FG4y1v7co?spm_id_from=333.999.0.0&vd_source=438f630fe29bd5049b24c7f05b1bcaa3)
 
+## Dependency
+Follow the [fast_lio](https://github.com/hku-mars/FAST_LIO)
+
+## Build
+
+Use the following commands to download and compile the package.
+
+```
+cd ~/${yourdir}/src
+git clone https://github.com/chengwei0427/ESKF_LIO.git
+cd ..
+source devel/setup.bash
+catkin_make 
+```
+
+## How to run
+1. change the params in **config/feat.yaml**;
+2. test direct/feature based eskf-lio use **run.launch**;
+3. test **multi-lidar** slam use **run_multi.launch**;
+
+## other notes
+1. you cloud test the **multi-lidar** with the **UrbanNavDataset**;
+2. the **auxiliary** lidar **only support velodyne** current, the **primary** lidar support multi-type lidars(such as velodyne,ouster,robosense, livox etc.);
 
 ## TODO
 
@@ -49,7 +73,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
   - [x] add extrinsic parameter calibration
   - [ ] compare with FAST-LIO2
   - [x] add test video
-  - [ ] support multi-lidar 
+  - [x] support multi-lidar 
 
 
 
