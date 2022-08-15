@@ -280,11 +280,11 @@ public:
           dst.z = src.z;
           dst.intensity = src.intensity;
           dst.normal_y = src.ring; //  ring
-          dst.normal_z = timespan;
-          dst.normal_x = src.time / timespan;
+          dst.normal_z = timeScanEnd - timeScanCur;
 
           if (tmpTimeScanCur + src.time >= timeScanCur && tmpTimeScanCur + src.time < timeScanEnd)
           {
+            dst.normal_x = (tmpTimeScanCur + src.time - timeScanCur) / (timeScanEnd - timeScanCur);
             Eigen::Vector3d pt(dst.x, dst.y, dst.z);
             pt = R_Ax2Pri * pt + T_Ax2Pri;
             dst.x = pt[0], dst.y = pt[1], dst.z = pt[2];
