@@ -246,6 +246,7 @@ public:
     {
       samplePointCloud();
       publishSampleCloud();
+      resetParameters();
     }
   }
   // #define TEST_LIO_SAM_6AXIS_DATA
@@ -253,6 +254,8 @@ public:
   {
     sensor_msgs::PointCloud2 currentCloudMsg = *laserCloudMsg;
     double timespan;
+    cloudHeader = currentCloudMsg.header;
+    timeScanCur = cloudHeader.stamp.toSec();
 
     if (sensor == SensorType::VELODYNE)
     {
@@ -341,12 +344,13 @@ public:
       pcl::fromROSMsg(currentCloudMsg, *tmpRSCloudIn);
       // inputCloud->points.resize(tmpRSCloudIn->size());
       // inputCloud->is_dense = tmpRSCloudIn->is_dense;
+
       timespan = tmpRSCloudIn->points[tmpRSCloudIn->size() - 1].timestamp - tmpRSCloudIn->points[0].timestamp;
       std::cout << "fist: " << tmpRSCloudIn->points[1].timestamp
                 << ", 100: " << tmpRSCloudIn->points[100].timestamp
                 << ",intervel: " << tmpRSCloudIn->points[tmpRSCloudIn->size() - 1].timestamp - tmpRSCloudIn->points[0].timestamp
                 << ",t: " << tmpRSCloudIn->points[0].timestamp - currentCloudMsg.header.stamp.toSec()
-                << "timespan: " << timespan << std::endl;
+                << "timespan: " << timespan << ",cloudsize: " << tmpRSCloudIn->size() << std::endl;
       for (size_t i = 0; i < tmpRSCloudIn->size(); i++)
       {
         auto &src = tmpRSCloudIn->points[i];
@@ -363,7 +367,8 @@ public:
         dst.normal_x = (src.timestamp - tmpRSCloudIn->points[0].timestamp) / timespan;
         inputCloud->push_back(dst);
       }
-      timespan = 0.0;
+      // timespan = 0.0;
+      cloudHeader.stamp = ros::Time().fromSec(cloudHeader.stamp.toSec() - timespan);
     }
     else
     {
@@ -372,8 +377,6 @@ public:
     }
 
     // get timestamp
-    cloudHeader = currentCloudMsg.header;
-    timeScanCur = cloudHeader.stamp.toSec();
     timeScanEnd = timeScanCur + timespan; // inputCloud->points.back().normal_x;
     // std::cout << "timeC:" << timeScanCur << "," << timespan << std::endl;
 
