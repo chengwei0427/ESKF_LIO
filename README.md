@@ -17,8 +17,17 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
   - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
   - add online extrinsic calib as fast-lio2
   - add new lidar process moudle, this moudle support **process multi-lidar (as one Lidar)**;
+  - add **greedy based feature select**(reference to M-LOAM);(upload later)
 
 ##  DEMO
+**[update 2022-11-08]**
+
+<p align='center'>
+    <img src="./doc/gfs.png" alt="drawing" width="1000"/>
+</p>
+
+[**VIDEO**: IESKF-LIO+Greedy based Feature Select](https://www.bilibili.com/video/BV1o14y1V7wS/?spm_id_from=333.999.0.0&vd_source=438f630fe29bd5049b24c7f05b1bcaa3)
+
 **[update 2022-08-05]**
 
 <p align="center">
@@ -74,8 +83,28 @@ catkin_make
   - [ ] compare with FAST-LIO2
   - [x] add test video
   - [x] support multi-lidar 
+  - [ ] add greedy base feature select
 
+<!-- CONTRIBUTING -->
+## **Contributing**
 
+Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+
+If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
+Don't forget to give the project a star! Thanks again!
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+<!-- CONTACT -->
+## **Contact**
+
+**Author: chengwei zhao<br />
+Maintainer: chengwei zhao(960732491@qq.com)<br />
+Project Link: [ESKF_LIO](https://github.com/chengwei0427/ESKF_LIO)<br />**
 
 ## Acknowledgments
-Thanks for LOAM, [FAST_LIO](https://github.com/hku-mars/FAST_LIO) ,[LIO_SAM](https://github.com/TixiaoShan/LIO-SAM) and [UrbanNavDataset](https://github.com/IPNL-POLYU/UrbanNavDataset).
+Thanks for LOAM, [FAST_LIO](https://github.com/hku-mars/FAST_LIO) ,[LIO_SAM](https://github.com/TixiaoShan/LIO-SAM), [M-LOAM](https://github.com/gogojjh/M-LOAM) and [UrbanNavDataset](https://github.com/IPNL-POLYU/UrbanNavDataset).
