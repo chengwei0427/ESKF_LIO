@@ -261,7 +261,7 @@ void feat_points_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
     lidar_buffer.push_back(msg);
     last_timestamp_lidar = msg->header.stamp.toSec();
-
+    // std::cout << "get lidar: " << last_timestamp_lidar << ",lidar size: " << lidar_buffer.size() << std::endl;
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
@@ -284,7 +284,7 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     last_timestamp_imu = timestamp;
 
     imu_buffer.push_back(msg);
-    // std::cout<<"got imu: "<<timestamp<<" imu size "<<imu_buffer.size()<<std::endl;
+    // std::cout << "got imu: " << timestamp << " imu size " << imu_buffer.size() << std::endl;
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
@@ -385,11 +385,21 @@ void map_incremental()
     add_point_size = PointToAdd.size() + PointNoNeedDownsample.size();
 }
 
+void saveTrajectoryTUMformat(std::fstream &fout, std::string &stamp, Eigen::Vector3d &xyz, Eigen::Quaterniond &xyzw)
+{
+    fout << stamp << " " << xyz[0] << " " << xyz[1] << " " << xyz[2] << " " << xyzw.x() << " " << xyzw.y() << " " << xyzw.z() << " " << xyzw.w() << std::endl;
+}
+
+void saveTrajectoryTUMformat(std::fstream &fout, std::string &stamp, double x, double y, double z, double qx, double qy, double qz, double qw)
+{
+    fout << stamp << " " << x << " " << y << " " << z << " " << qx << " " << qy << " " << qz << " " << qw << std::endl;
+}
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "laserMapping");
     ros::NodeHandle nh;
     std::string imu_topic;
+    bool save_tum_traj;
 
     /*** variables initialize ***/
     nh.param<std::string>("common/imuTopic", imu_topic, "/livox/imu");
@@ -401,6 +411,7 @@ int main(int argc, char **argv)
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, std::vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, std::vector<double>());
+    nh.param<bool>("mapping/save_tum_traj", save_tum_traj, false);
 
     Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
     Lidar_R_wrt_IMU << MAT_FROM_ARRAY(extrinR);
@@ -439,6 +450,9 @@ int main(int argc, char **argv)
     std::shared_ptr<ImuProcess> p_imu(new ImuProcess());
     p_imu->set_extrinsic(Lidar_T_wrt_IMU, Lidar_R_wrt_IMU);
 
+    //  create folder
+    std::string command = "mkdir -p " + std::string(ROOT_DIR) + "Log";
+    system(command.c_str());
     /*** debug record ***/
     std::ofstream fout_pre, fout_out;
     fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), std::ios::out);
@@ -574,7 +588,7 @@ int main(int argc, char **argv)
                             ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
 
                             point_selected_surf[i] = points_near.size() < NUM_MATCH_POINTS        ? false
-                                                     : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 3 ? false
+                                                     : pointSearchSqDis[NUM_MATCH_POINTS - 1] > 5 ? false
                                                                                                   : true;
                         }
 
@@ -584,7 +598,7 @@ int main(int argc, char **argv)
                         VF(4)
                         pabcd;
                         point_selected_surf[i] = false;
-                        if (esti_plane(pabcd, points_near, 0.2f))
+                        if (esti_plane(pabcd, points_near, 0.1f))
                         {
                             // loss fuction
                             float pd2 = pabcd(0) * point_world.x + pabcd(1) * point_world.y + pabcd(2) * point_world.z + pabcd(3); // 公式12）    点到面的距离
@@ -770,6 +784,20 @@ int main(int argc, char **argv)
                          << " " << state.bias_a.transpose() << " " << state.gravity.transpose()
                          << " " << feats_undistort->points.size() << std::endl;
 
+                if (save_tum_traj)
+                {
+                    static std::fstream fout_traj(DEBUG_FILE_DIR("odom_trajectory_TUM.txt"), std::ios::out);
+                    static std::ostringstream stamp;
+                    stamp.str("");
+                    if (fout_traj.is_open())
+                    {
+                        // std::string tstamp = to_string(ros::Time().fromSec(laser_odometry->time));
+                        std::string tstamp = std::to_string(Measures.lidar_beg_time);
+                        Eigen::Quaterniond q_curr = Eigen::Quaterniond(state.rot_end); // 旋转矩阵转为四元数
+                        q_curr.normalize();                                            // 转为四元数之后，需要进行归一化
+                        saveTrajectoryTUMformat(fout_traj, tstamp, state.pos_end, q_curr);
+                    }
+                }
                 std::cout << ANSI_COLOR_GREEN_BOLD << "[ mapping ]: iteration count: " << iterCount + 1 << ANSI_COLOR_RESET << std::endl;
 
                 /*** add new frame points to map ikdtree ***/
@@ -801,7 +829,7 @@ int main(int argc, char **argv)
 
                 sensor_msgs::PointCloud2 laserCloudFullRes3;
                 pcl::toROSMsg(*laserCloudFullResColor, laserCloudFullRes3);
-                laserCloudFullRes3.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
+                laserCloudFullRes3.header.stamp = ros::Time().fromSec(Measures.lidar_end_time); // ros::Time::now(); //.fromSec(last_timestamp_lidar);
                 laserCloudFullRes3.header.frame_id = "/camera_init";
                 pubLaserCloudFullRes.publish(laserCloudFullRes3);
             }
@@ -817,7 +845,7 @@ int main(int argc, char **argv)
                 }
                 sensor_msgs::PointCloud2 laserCloudFullRes3;
                 pcl::toROSMsg(*laserCloudFullResColor, laserCloudFullRes3);
-                laserCloudFullRes3.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
+                laserCloudFullRes3.header.stamp = ros::Time().fromSec(Measures.lidar_end_time);
                 laserCloudFullRes3.header.frame_id = "/camera_init";
                 pubLaserCloudEffect.publish(laserCloudFullRes3);
             }
@@ -825,7 +853,8 @@ int main(int argc, char **argv)
             /******* Publish Maps:  *******/
             sensor_msgs::PointCloud2 laserCloudMap;
             pcl::toROSMsg(*featsFromMap, laserCloudMap);
-            laserCloudMap.header.stamp = ros::Time::now(); // ros::Time().fromSec(last_timestamp_lidar);
+            laserCloudMap.header.stamp = ros::Time().fromSec(Measures.lidar_end_time);
+            ;
             laserCloudMap.header.frame_id = "/camera_init";
             pubLaserCloudMap.publish(laserCloudMap);
 
@@ -833,7 +862,7 @@ int main(int argc, char **argv)
             geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
             odomAftMapped.header.frame_id = "/camera_init";
             odomAftMapped.child_frame_id = "/aft_mapped";
-            odomAftMapped.header.stamp = ros::Time::now(); // ros::Time().fromSec(last_timestamp_lidar);
+            odomAftMapped.header.stamp = ros::Time().fromSec(Measures.lidar_end_time);
             odomAftMapped.pose.pose.orientation.x = geoQuat.x;
             odomAftMapped.pose.pose.orientation.y = geoQuat.y;
             odomAftMapped.pose.pose.orientation.z = geoQuat.z;
@@ -857,7 +886,7 @@ int main(int argc, char **argv)
             transform.setRotation(q);
             br.sendTransform(tf::StampedTransform(transform, odomAftMapped.header.stamp, "/camera_init", "/aft_mapped"));
 
-            msg_body_pose.header.stamp = ros::Time::now();
+            msg_body_pose.header.stamp = ros::Time().fromSec(Measures.lidar_end_time);
             msg_body_pose.header.frame_id = "/camera_odom_frame";
             msg_body_pose.pose.position.x = state.pos_end(0);
             msg_body_pose.pose.position.y = state.pos_end(1);

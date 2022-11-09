@@ -130,7 +130,7 @@ void ImuProcess::Reset()
   b_first_frame_ = true;
   init_iter_num = 1;
 
-  last_imu_ = nullptr;
+  last_imu_.reset(new sensor_msgs::Imu());
 
   // gyr_int_.Reset(-1, nullptr);
   start_timestamp_ = -1;
@@ -193,10 +193,12 @@ void ImuProcess::IMU_Initial(const MeasureGroup &meas, StatesGroup &state_inout,
   }
 
   state_inout.gravity = -mean_acc / mean_acc.norm() * G_m_s2;
-  state_inout.rot_end = Eye3d; // Exp(mean_acc.cross(Eigen::Vector3d(0, 0, -1 / scale_gravity)));
+  // state_inout.rot_end = Eye3d; // Exp(mean_acc.cross(Eigen::Vector3d(0, 0, -1 / scale_gravity)));
   state_inout.bias_g = mean_gyr;
   state_inout.R_L_I = Lidar_R_wrt_IMU;
   state_inout.T_L_I = Lidar_T_wrt_IMU;
+
+  last_imu_ = meas.imu.back();
 }
 
 void ImuProcess::UndistortPcl(const MeasureGroup &meas, StatesGroup &state_inout, PointCloudXYZI &pcl_out)
@@ -383,6 +385,8 @@ void ImuProcess::Process(const MeasureGroup &meas, StatesGroup &stat, PointCloud
     if (init_iter_num > MAX_INI_COUNT)
     {
       imu_need_init_ = false;
+      cov_acc = Eigen::Vector3d(0.1, 0.1, 0.1);
+      cov_gyr = Eigen::Vector3d(0.1, 0.1, 0.1);
       // std::cout<<"mean acc: "<<mean_acc<<" acc measures in word frame:"<<state.rot_end.transpose()*mean_acc<<std::endl;
       ROS_INFO("IMU Initials: Gravity: %.4f %.4f %.4f; state.bias_g: %.4f %.4f %.4f; acc covarience: %.8f %.8f %.8f; gry covarience: %.8f %.8f %.8f",
                stat.gravity[0], stat.gravity[1], stat.gravity[2], stat.bias_g[0], stat.bias_g[1], stat.bias_g[2], cov_acc[0], cov_acc[1], cov_acc[2], cov_gyr[0], cov_gyr[1], cov_gyr[2]);

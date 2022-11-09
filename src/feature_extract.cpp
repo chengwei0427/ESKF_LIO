@@ -249,7 +249,7 @@ public:
       resetParameters();
     }
   }
-  // #define TEST_LIO_SAM_6AXIS_DATA
+#define TEST_LIO_SAM_6AXIS_DATA
   bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg)
   {
     sensor_msgs::PointCloud2 currentCloudMsg = *laserCloudMsg;
@@ -262,8 +262,9 @@ public:
       pcl::moveFromROSMsg(currentCloudMsg, *laserCloudIn);
       inputCloud->points.resize(laserCloudIn->size());
       inputCloud->is_dense = laserCloudIn->is_dense;
+      //  FIXME: NCLT数据集需要乘以1e-6,其他数据集不需要
 #ifndef TEST_LIO_SAM_6AXIS_DATA
-      timespan = laserCloudIn->points.back().time;
+      timespan = laserCloudIn->points.back().time * 1e-6;
 #else
       timespan = laserCloudIn->points.back().time - laserCloudIn->points[0].time;
 #endif
@@ -278,7 +279,7 @@ public:
         dst.normal_y = src.ring; //  ring
         dst.normal_z = timespan;
 #ifndef TEST_LIO_SAM_6AXIS_DATA
-        dst.normal_x = src.time / timespan;
+        dst.normal_x = src.time * 1e-6 / timespan;
 #else
         dst.normal_x = (src.time + timespan) / timespan;
 #endif
@@ -434,6 +435,7 @@ public:
         continue;
       sampleCloud->push_back(thisPoint);
     }
+    // std::cout << "-------------cloud: " << cloudSize << "  " << sampleCloud->size() << std::endl;
   }
 
   void projectPointCloud()
