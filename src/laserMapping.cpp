@@ -675,7 +675,7 @@ int main(int argc, char **argv)
                             Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z, VEC_FROM_ARRAY(B), VEC_FROM_ARRAY(C);
                         }
                         else
-                            Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z;
+                            Hsub.row(i) << VEC_FROM_ARRAY(A), norm_p.x, norm_p.y, norm_p.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0;
 
                         /*** Measuremnt: distance to the closest surface/corner ***/
                         meas_vec(i) = -norm_p.intensity;
@@ -713,10 +713,23 @@ int main(int argc, char **argv)
                     {
                         auto &&Hsub_T = Hsub.transpose();
                         H_T_H.block<12, 12>(0, 0) = Hsub_T * Hsub;
+                        //  公式(20)上下同时化简R可得
                         Eigen::Matrix<double, DIM_OF_STATES, DIM_OF_STATES> &&K_1 =
                             (H_T_H + (state.cov / LASER_POINT_COV).inverse()).inverse(); //  由于laser point互相独立，R是对角矩阵，即这里的 LASER_POINT_COV
                         K = K_1.block<DIM_OF_STATES, 12>(0, 0) * Hsub_T;                 //  公式20）  ESKF 卡尔曼增益  ---  [3]
+ //  如下公式可行，并且效果一致，计算量很大
+                        if (0)
+                        { //    algo 1
+                            auto R = Eigen::MatrixXd::Identity(effct_feat_num, effct_feat_num) * LASER_POINT_COV;
+                            auto R_inv = Eigen::MatrixXd::Identity(effct_feat_num, effct_feat_num) * (1.0 / LASER_POINT_COV);
+                            // auto K_in = (Hsub_T * R.inverse() * Hsub + state.cov.inverse()).inverse() * Hsub_T * R.inverse();
+                            auto K1 = (Hsub_T * R_inv * Hsub + state.cov.inverse()).inverse();
+                            auto K_in = K1 * Hsub_T * R_inv;
+                        }
 
+						// auto K_in = (H_T_H + state.cov.inverse() * LASER_POINT_COV).inverse() * Hsub_T;
+                        // auto K_in = (H_T_H + (state.cov / LASER_POINT_COV).inverse()).inverse() * Hsub_T;
+						
                         // solution = K * meas_vec;
                         // state += solution;
 

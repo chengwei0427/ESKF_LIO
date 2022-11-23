@@ -17,7 +17,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
   - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
   - add online extrinsic calib as fast-lio2
   - add new lidar process moudle, this moudle support **process multi-lidar (as one Lidar)**;
-  - add **greedy based feature select**(reference to M-LOAM);(upload later)
+  - add **greedy based feature select**(reference to M-LOAM);(code upload in a new branck(gfs) 2022-11-23)
 
 ##  DEMO
 **[update 2022-11-08]**
