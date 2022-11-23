@@ -5,7 +5,7 @@
   <a href="https://github.com/chengwei0427/ESKF_LIO/issues"><img src="https://img.shields.io/github/issues/chengwei0427/ESKF_LIO"></img></a>
   <a href="https://github.com/chengwei0427/ESKF_LIO/graphs/contributors"><img src="https://img.shields.io/github/contributors/chengwei0427/ESKF_LIO?color=blue"></img></a>
 
-## iESKF-lio
+## iESKF-lio(gfs_branck)
 
 This repository is a modified LiDAR-inertial odometry system. The system is developed based on the open-source odometry framework [**FAST-LIO**](https://github.com/XW-HKU/fast_lio) to get the odometry information. And the feature extract moudle is implemented based on [**LIO-SAM**](https://github.com/TixiaoShan/LIO-SAM) .
 
@@ -17,7 +17,7 @@ This repository is a modified LiDAR-inertial odometry system. The system is deve
   - the new laser mapping moudle support **multiple lidar types**: both traditional spinning lidar (velodyne, ouster, robsense etc.) and solid-state lidar(livox);
   - add online extrinsic calib as fast-lio2
   - add new lidar process moudle, this moudle support **process multi-lidar (as one Lidar)**;
-  - add **greedy based feature select**(reference to M-LOAM);(upload later)
+  - add **greedy based feature select**(reference to M-LOAM);
 
 ##  DEMO
 **[update 2022-11-08]**
@@ -83,7 +83,7 @@ catkin_make
   - [ ] compare with FAST-LIO2
   - [x] add test video
   - [x] support multi-lidar 
-  - [ ] add greedy base feature select
+  - [x] add greedy base feature select
 
 <!-- CONTRIBUTING -->
 ## **Contributing**

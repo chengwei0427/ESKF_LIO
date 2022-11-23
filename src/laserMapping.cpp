@@ -57,6 +57,7 @@
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/filters/extract_indices.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
@@ -64,10 +65,19 @@
 #include <geometry_msgs/Vector3.h>
 #include <ikd-Tree/ikd_Tree.h>
 #include "tool_color_printf.hpp"
+#include "tic_toc.h"
+#include "random_generator.hpp"
+#include "point_with_cov.hpp"
+#include "pose.h"
+#include "lidar_map_factor.hpp"
+#include "math.hpp"
 
 #define INIT_TIME (0)
 #define LASER_POINT_COV (0.0015)
 #define NUM_MATCH_POINTS (5)
+
+#define MAX_FEATURE_SELECT_TIME 20 // 10ms
+#define MAX_RANDOM_QUEUE_TIME 20
 
 std::string root_dir = ROOT_DIR;
 
@@ -131,12 +141,44 @@ V3D pos_lid;
 MeasureGroup Measures;
 StatesGroup state;
 
+common::RandomGeneratorInt<size_t> rgi_;
+
 void SigHandle(int sig)
 {
     flg_exit = true;
     ROS_WARN("catch sig %d", sig);
     sig_buffer.notify_all();
 }
+
+class PointFeature
+{
+public:
+    PointFeature() : idx_(0), laser_idx_(0), type_('n') {}
+    size_t idx_;
+    size_t laser_idx_;
+    Eigen::Vector3d point_;
+    Eigen::VectorXd coeffs_;
+    Eigen::MatrixXd jaco_;
+    char type_;
+
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+};
+
+class FeatureWithScore
+{
+public:
+    FeatureWithScore(const int &idx, const double &score, const Eigen::MatrixXd &jaco)
+        : idx_(idx), score_(score), jaco_(jaco) {}
+
+    bool operator<(const FeatureWithScore &fws) const
+    {
+        return this->score_ < fws.score_;
+    }
+
+    size_t idx_;
+    double score_;
+    Eigen::MatrixXd jaco_;
+};
 
 // project lidar frame to world
 void pointBodyToWorld(PointType const *const pi, PointType *const po)
@@ -385,6 +427,259 @@ void map_incremental()
     add_point_size = PointToAdd.size() + PointNoNeedDownsample.size();
 }
 
+int SIZE_POSE = 7;
+void evaluateFeatJacobianMatching(const Pose &pose_local,
+                                  PointFeature &feature,
+                                  const Eigen::Matrix3d &cov_matrix)
+{
+    double **param = new double *[1];
+    param[0] = new double[SIZE_POSE];
+    param[0][0] = pose_local.t_(0);
+    param[0][1] = pose_local.t_(1);
+    param[0][2] = pose_local.t_(2);
+    param[0][3] = pose_local.q_.x();
+    param[0][4] = pose_local.q_.y();
+    param[0][5] = pose_local.q_.z();
+    param[0][6] = pose_local.q_.w();
+
+    double *res = new double[1];
+    double **jaco = new double *[1];
+    jaco[0] = new double[1 * 7];
+    // if (feature.type_ == 's')
+    // {
+
+    LidarMapPlaneNormFactor f(feature.point_, feature.coeffs_, cov_matrix);
+    f.Evaluate(param, res, jaco);
+    // std::cout << "after lidarmapplanenormfactor" << std::endl;
+    // }
+    // else if (feature.type_ == 'c')
+    // {
+    //     LidarMapEdgeFactor f(feature.point_, feature.coeffs_, cov_matrix);
+    //     f.Evaluate(param, res, jaco);
+    // }
+
+    Eigen::Map<Eigen::Matrix<double, 1, 7, Eigen::RowMajor>> mat_jacobian(jaco[0]);
+    feature.jaco_ = mat_jacobian.topLeftCorner<1, 6>();
+
+    /* double *rho = new double[3];
+     double sqr_error = res[0] * res[0] + res[1] * res[1] + res[0] * res[0];
+     ceres::LossFunction *loss_function_;
+     loss_function_->Evaluate(sqr_error, rho);
+     std::cout << "after loss_funciton" << std::endl;
+     std::cout << "jaco: " << jaco[0] << std::endl;
+
+     // feature.jaco_ *= sqrt(std::max(0.0, rho[1])); // TODO
+     std::cout << "error: " << sqrt(sqr_error) << ", rho_der: " << rho[1]
+               << ", logd: " << common::logDet(feature.jaco_.transpose() * feature.jaco_, true);*/
+
+    delete[] res;
+    // delete[] rho;
+    delete[] jaco[0];
+    delete[] jaco;
+    delete[] param[0];
+    delete[] param;
+}
+
+bool matchFeaturePointFromMap(const PointType &point_ori, PointFeature &feature,
+                              const size_t &idx, const size_t &N_NEIGH, const bool &CHECK_FOV)
+{
+    std::vector<float> pointSearchSqDis(NUM_MATCH_POINTS);
+
+    auto &points_near = Nearest_Points[idx];
+    PointType point_world;
+    V3D p_body(point_ori.x, point_ori.y, point_ori.z);
+    V3D p_global(state.rot_end * (state.R_L_I * p_body + state.T_L_I) + state.pos_end);
+    point_world.x = p_global(0);
+    point_world.y = p_global(1);
+    point_world.z = p_global(2);
+    point_world.intensity = point_ori.intensity;
+
+    /** Find the closest surfaces in the map **/
+    ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
+    Eigen::MatrixXf mat_A = Eigen::MatrixXf::Zero(NUM_MATCH_POINTS, 3);
+    Eigen::MatrixXf mat_B = Eigen::MatrixXf::Constant(NUM_MATCH_POINTS, 1, -1);
+
+    if (points_near.size() == NUM_MATCH_POINTS)
+    {
+        if (pointSearchSqDis[NUM_MATCH_POINTS - 1] < 1.0)
+        {
+            for (int j = 0; j < NUM_MATCH_POINTS; j++)
+            {
+                mat_A(j, 0) = points_near[j].x;
+                mat_A(j, 1) = points_near[j].y;
+                mat_A(j, 2) = points_near[j].z;
+            }
+            Eigen::Vector3f norm = mat_A.colPivHouseholderQr().solve(mat_B);
+            float negative_OA_dot_norm = 1 / norm.norm();
+            norm.normalize();
+
+            bool plane_valid = true;
+            for (int j = 0; j < NUM_MATCH_POINTS; j++)
+            {
+                if (fabs(norm(0) * points_near[j].x +
+                         norm(1) * points_near[j].y +
+                         norm(2) * points_near[j].z + negative_OA_dot_norm) > 0.2)
+                    plane_valid = false;
+                break;
+            }
+            if (plane_valid)
+            {
+                // pd2 (distance) smaller, s larger
+                float pd2 = norm(0) * point_world.x + norm(1) * point_world.y + norm(2) * point_world.z + negative_OA_dot_norm;
+                float s = 1 - 0.9f * fabs(pd2) / sqrt(common::sqrSum(point_world.x, point_world.y, point_world.z));
+
+                Eigen::Vector4d coeff(norm(0), norm(1), norm(2), negative_OA_dot_norm);
+                feature.idx_ = idx;
+                feature.point_ = Eigen::Vector3d{point_ori.x, point_ori.y, point_ori.z};
+                feature.coeffs_ = coeff;
+                feature.laser_idx_ = (size_t)point_ori.intensity;
+                feature.type_ = 's';
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void goodFeatureSelect(PointCloudXYZI::Ptr &feats_ori, std::vector<PointFeature> &all_features,
+                       std::vector<int> &sel_feature_idx, double gf_ratio_cur,
+                       Eigen::Matrix<double, 6, 6> &sub_mat_H, const std::string gf_method)
+{
+    size_t num_all_features = feats_ori->size();
+    all_features.resize(num_all_features);
+
+    std::vector<size_t> all_feature_idx(num_all_features);
+    std::vector<int> feature_visited(num_all_features, -1);
+    std::iota(all_feature_idx.begin(), all_feature_idx.end(), 0);
+    if (gf_method == "full")
+    {
+        sel_feature_idx.resize(num_all_features);
+        std::iota(sel_feature_idx.begin(), sel_feature_idx.end(), 0);
+        return;
+    }
+
+    size_t num_use_features;
+    num_use_features = static_cast<size_t>(num_all_features * gf_ratio_cur);
+    sel_feature_idx.resize(num_use_features);
+    size_t num_sel_features = 0;
+    TicToc t_sel_feature;
+
+    if (gf_method == "rnd")
+    {
+        while (true)
+        {
+            if ((num_sel_features >= num_use_features) ||
+                (all_feature_idx.size() == 0) ||
+                (t_sel_feature.toc() > MAX_FEATURE_SELECT_TIME))
+                break;
+            size_t j = rgi_.geneRandUniform(0, all_feature_idx.size() - 1);
+            size_t que_idx = all_feature_idx[j];
+            sel_feature_idx[num_sel_features] = que_idx;
+            num_sel_features++;
+            all_feature_idx.erase(all_feature_idx.begin() + j);
+        }
+        sel_feature_idx.resize(num_sel_features);
+        return;
+    }
+
+    bool b_match;
+    double cur_det;
+    size_t num_rnd_que;
+    size_t n_neigh = 5;
+
+    while (true)
+    {
+        if ((num_sel_features >= num_use_features) ||
+            (all_feature_idx.size() == 0) ||
+            (t_sel_feature.toc() > MAX_FEATURE_SELECT_TIME))
+            break;
+        size_t size_rnd_subset = static_cast<size_t>(1.0 * num_all_features / num_use_features);
+        std::priority_queue<FeatureWithScore, std::vector<FeatureWithScore>, std::less<FeatureWithScore>> heap_subset;
+        while (true)
+        {
+            if (all_feature_idx.size() == 0)
+                break;
+            num_rnd_que = 0;
+            size_t j;
+            while (num_rnd_que < MAX_RANDOM_QUEUE_TIME)
+            {
+                j = rgi_.geneRandUniform(0, all_feature_idx.size() - 1);
+                if (feature_visited[j] < int(num_sel_features))
+                {
+                    feature_visited[j] = int(num_sel_features);
+                    break;
+                }
+                num_rnd_que++;
+            }
+            if (num_rnd_que >= MAX_RANDOM_QUEUE_TIME || t_sel_feature.toc() > MAX_FEATURE_SELECT_TIME)
+                break;
+
+            size_t que_idx = all_feature_idx[j];
+            b_match = false;
+
+            b_match = matchFeaturePointFromMap(feats_ori->points[que_idx],
+                                               all_features[que_idx],
+                                               que_idx,
+                                               n_neigh,
+                                               false);
+
+            if (b_match)
+            {
+                Eigen::Matrix3d cov_matrix;
+                //  FIXME: w/o ua,cov is zero
+                Eigen::Matrix3d cov_point = Eigen::Matrix3d::Zero();
+                common::PointIWithCov point_cov(feats_ori->points[que_idx], cov_point.cast<float>());
+                common::extractCov(point_cov, cov_matrix);
+
+                Pose pose_local(state.rot_end * state.R_L_I, state.rot_end * state.T_L_I + state.pos_end);
+                evaluateFeatJacobianMatching(pose_local,
+                                             all_features[que_idx],
+                                             cov_matrix);
+            }
+            else // not found constraints or outlier constraints
+            {
+                all_feature_idx.erase(all_feature_idx.begin() + j);
+                feature_visited.erase(feature_visited.begin() + j);
+                continue;
+            }
+
+            const Eigen::MatrixXd &jaco = all_features[que_idx].jaco_;
+            cur_det = common::logDet(sub_mat_H + jaco.transpose() * jaco, true);
+            heap_subset.push(FeatureWithScore(que_idx, cur_det, jaco));
+
+            if (heap_subset.size() >= size_rnd_subset)
+            {
+                const FeatureWithScore &fws = heap_subset.top();
+                std::vector<size_t>::iterator iter = std::find(all_feature_idx.begin(), all_feature_idx.end(), fws.idx_);
+                if (iter == all_feature_idx.end())
+                {
+                    std::cerr << "[goodFeatureMatching]: not exist feature idx !" << std::endl;
+                    break;
+                }
+                sub_mat_H += fws.jaco_.transpose() * fws.jaco_;
+
+                size_t position = iter - all_feature_idx.begin();
+                all_feature_idx.erase(all_feature_idx.begin() + position);
+                feature_visited.erase(feature_visited.begin() + position);
+                sel_feature_idx[num_sel_features] = fws.idx_;
+                num_sel_features++;
+                // printf("position: %lu, num: %lu\n", position, num_rnd_que);
+                break;
+            }
+        }
+        if (num_rnd_que >= MAX_RANDOM_QUEUE_TIME || t_sel_feature.toc() > MAX_FEATURE_SELECT_TIME)
+            break;
+    }
+    if (num_rnd_que >= MAX_RANDOM_QUEUE_TIME || t_sel_feature.toc() > MAX_FEATURE_SELECT_TIME)
+    {
+        // std::cerr << "mapping [goodFeatureMatching]: early termination!" << std::endl;
+        std::cout << "early termination: " << num_rnd_que << ", " << t_sel_feature.toc() << std::endl;
+    }
+
+    sel_feature_idx.resize(num_sel_features);
+    printf("num of all features: %lu, sel features: %lu\n", num_all_features, num_sel_features);
+}
+
 void saveTrajectoryTUMformat(std::fstream &fout, std::string &stamp, Eigen::Vector3d &xyz, Eigen::Quaterniond &xyzw)
 {
     fout << stamp << " " << xyz[0] << " " << xyz[1] << " " << xyz[2] << " " << xyzw.x() << " " << xyzw.y() << " " << xyzw.z() << " " << xyzw.w() << std::endl;
@@ -394,11 +689,13 @@ void saveTrajectoryTUMformat(std::fstream &fout, std::string &stamp, double x, d
 {
     fout << stamp << " " << x << " " << y << " " << z << " " << qx << " " << qy << " " << qz << " " << qw << std::endl;
 }
+
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "laserMapping");
     ros::NodeHandle nh;
     std::string imu_topic;
+    std::string gf_method;
     bool save_tum_traj;
 
     /*** variables initialize ***/
@@ -411,6 +708,7 @@ int main(int argc, char **argv)
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, std::vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, std::vector<double>());
+    nh.param<std::string>("mapping/gf_method", gf_method, "full");
     nh.param<bool>("mapping/save_tum_traj", save_tum_traj, false);
 
     Lidar_T_wrt_IMU << VEC_FROM_ARRAY(extrinT);
@@ -419,12 +717,14 @@ int main(int argc, char **argv)
     std::cout << "R: \n"
               << Lidar_R_wrt_IMU << std::endl;
     std::cout << "T: " << Lidar_T_wrt_IMU.transpose() << std::endl;
+    std::cout << "feature select: " << gf_method << std::endl;
 
     ROS_INFO("\033[1;32m----> ESKF_LIO mapping Started.\033[0m");
 
     ros::Subscriber sub_pcl = nh.subscribe("/laser_cloud_surf", 20000, feat_points_cbk);
     ros::Subscriber sub_imu = nh.subscribe(imu_topic, 20000, imu_cbk);
     ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100);
+    ros::Publisher pubLaserCloudFullRes2 = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered_gfs", 100);
     ros::Publisher pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100);
     ros::Publisher pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/Laser_map", 100);
     ros::Publisher pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
@@ -555,17 +855,35 @@ int main(int argc, char **argv)
                 deltaR = 0.0;
                 deltaT = 0.0;
 
+                std::vector<int> sel_feature_idx;
                 for (iterCount = 0; iterCount < NUM_MAX_ITERATIONS; iterCount++)
                 {
 
                     laserCloudOri->clear();
                     coeffSel->clear();
 
+                    //  FIXME: add greedy feature select here
+                    double gf_ratio_cur = 0.3;
+                    Eigen::Matrix<double, 6, 6> sub_mat_H;
+                    sub_mat_H = Eigen::Matrix<double, 6, 6>::Identity() * 1e-6;
+
+                    std::vector<PointFeature> all_features;
+
+                    // if (iterCount == 0)
+                    goodFeatureSelect(feats_down, all_features, sel_feature_idx, gf_ratio_cur, sub_mat_H, gf_method);
+
+                    std::cout << "==== end good feature select: " << sel_feature_idx.size() << std::endl;
+
                     /** closest surface search and residual computation **/
                     // omp_set_num_threads(4);
                     // #pragma omp parallel for
-                    for (int i = 0; i < feats_down_size; i++)
+                    int i;
+
+                    for (int idx = 0; idx < sel_feature_idx.size(); idx++)
+
                     {
+                        i = sel_feature_idx[idx];
+
                         PointType &point_body = feats_down->points[i];
                         PointType &point_world = feats_down_updated->points[i];
 
@@ -581,8 +899,10 @@ int main(int argc, char **argv)
                         std::vector<float> pointSearchSqDis(NUM_MATCH_POINTS);
 
                         auto &points_near = Nearest_Points[i];
+                        // std::cout << idx << ", " << i << "/" << feats_down->size() << ", " << points_near.size() << std::endl;
 
                         if (iterCount == 0 || rematch_en)
+                        // if (points_near.size() < 1)
                         {
                             /** Find the closest surfaces in the map **/
                             ikdtree.Nearest_Search(point_world, NUM_MATCH_POINTS, points_near, pointSearchSqDis);
@@ -717,6 +1037,34 @@ int main(int argc, char **argv)
                             (H_T_H + (state.cov / LASER_POINT_COV).inverse()).inverse(); //  由于laser point互相独立，R是对角矩阵，即这里的 LASER_POINT_COV
                         K = K_1.block<DIM_OF_STATES, 12>(0, 0) * Hsub_T;                 //  公式20）  ESKF 卡尔曼增益  ---  [3]
 
+                        static Eigen::Matrix<double, 6, 6> matP;
+                        static bool is_degenerate = false;
+                        if (iterCount == 0)
+                        {
+                            Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> esolver(H_T_H.block<6, 6>(0, 0));
+                            Eigen::Matrix<double, 1, 6> matE = esolver.eigenvalues().real(); //  eigenvalue from small to large
+                            Eigen::Matrix<double, 6, 6> matV = esolver.eigenvectors().real();
+                            Eigen::Matrix<double, 6, 6> matV2 = matV;
+
+                            std::cout << "------ " << matE << std::endl;
+                            matP.setZero();
+                            is_degenerate = false;
+                            float eigenThre[6] = {100, 100, 100, 100, 100, 100};
+                            for (int i = 0; i <= 5; i++)
+                            {
+                                if (matE(0, i) < eigenThre[i])
+                                {
+                                    for (int j = 0; j < 6; j++)
+                                    {
+                                        matV2(j, i) = 0;
+                                        is_degenerate = true;
+                                    }
+                                }
+                                else
+                                    break;
+                            }
+                            matP = matV.inverse() * matV2;
+                        }
                         // solution = K * meas_vec;
                         // state += solution;
 
@@ -725,6 +1073,13 @@ int main(int argc, char **argv)
                         // state = state_propagat + solution;
 
                         solution = K * meas_vec + vec - K * Hsub * vec.block<12, 1>(0, 0);
+                        {
+                            // if (is_degenerate)
+                            // {
+                            //     Eigen::Matrix<double, 6, 1> matX2 = solution.block<6, 1>(0, 0);
+                            //     solution.block<6, 1>(0, 0) = matP * matX2;
+                            // }
+                        }
                         state += solution; //   公式18）  ESKF 更新估计值 --- [4]
 
                         rot_add = solution.block<3, 1>(0, 0);
@@ -798,6 +1153,33 @@ int main(int argc, char **argv)
                         saveTrajectoryTUMformat(fout_traj, tstamp, state.pos_end, q_curr);
                     }
                 }
+
+                {
+                    PointCloudXYZI::Ptr feats_down_gfs(new PointCloudXYZI());
+                    pcl::IndicesPtr index(new std::vector<int>(sel_feature_idx));
+                    static pcl::ExtractIndices<PointType> extract;
+                    extract.setInputCloud(feats_down);
+                    extract.setIndices(index);
+                    extract.setNegative(false);
+                    extract.filter(*feats_down_gfs);
+
+                    pcl::PointXYZI temp_point;
+                    laserCloudFullResColor->clear();
+                    {
+                        for (int i = 0; i < feats_down_gfs->size(); i++)
+                        {
+                            RGBpointBodyToWorld(&feats_down_gfs->points[i], &temp_point);
+                            laserCloudFullResColor->push_back(temp_point);
+                        }
+
+                        sensor_msgs::PointCloud2 laserCloudFullRes3;
+                        pcl::toROSMsg(*laserCloudFullResColor, laserCloudFullRes3);
+                        laserCloudFullRes3.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
+                        laserCloudFullRes3.header.frame_id = "/camera_init";
+                        pubLaserCloudFullRes2.publish(laserCloudFullRes3);
+                    }
+                }
+
                 std::cout << ANSI_COLOR_GREEN_BOLD << "[ mapping ]: iteration count: " << iterCount + 1 << ANSI_COLOR_RESET << std::endl;
 
                 /*** add new frame points to map ikdtree ***/

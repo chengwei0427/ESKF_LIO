@@ -2,6 +2,7 @@ common:
   # Topics
   pointCloudTopic:  "/rslidar_points" #"/os_cloud_node/points" #"velodyne_points"    "points_raw"     rslidar_points      # Point cloud data
   imuTopic: "/gps/gtimu" # "/imu_correct" #"/os_cloud_node/imu" #"imu_data" #"imu_raw"      # IMU data
+  gpsTopic: "/gps/gpfpd"
 
 feature_extract:
   # Frames
@@ -45,7 +46,8 @@ feature_extract:
 
 mapping:
   dense_map_enable: true
-  gf_method: "full" #full--rnd--gfs
+  use_gps: true
+  gf_method: "full" #full--rnd--gfs (something wrong with rnd method)
   save_tum_traj: true
   max_iteration: 10 #10
   filter_size_surf: 0.4
